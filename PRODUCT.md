@@ -40,7 +40,7 @@ Name: **devsweep**. Visual reference is the author's own Lisa TUI (`@tarcisiopgs
 
 ## Evidence on Hand
 
-Measured on the author's machine on 2026-09-30 (see the design spec, §1). No users, testimonials or benchmarks exist yet; do not invent them.
+Measured on the author's machine on 2026-09-30: iOS simulators 19 GB, Docker volumes 14 GB, Gradle 8.8 GB, pnpm store 8.2 GB, bun 4.6 GB, Docker images 1.6 GB, Codex worktrees 933 MB. No users, testimonials or benchmarks exist yet; do not invent them.
 
 ## Product Principles
 
