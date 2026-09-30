@@ -1,5 +1,5 @@
 {
-  "name": "devsweep",
+  "name": "@tarcisiopgs/devsweep",
   "version": "0.0.0",
   "description": "Find and remove what a developer's Mac accumulates: build artifacts, agent worktrees, simulators, emulators, Docker leftovers and dev caches.",
   "license": "MIT",
