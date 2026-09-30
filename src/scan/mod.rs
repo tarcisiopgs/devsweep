@@ -134,6 +134,51 @@ pub fn which(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Like [`run`], in `cwd`, killing the command after `timeout`. Protects the
+/// scan from tools that block (a `git` waiting on a macOS privacy prompt).
+pub fn run_timeout(
+    argv: &[&str],
+    cwd: Option<&std::path::Path>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<String> {
+    use std::io::Read;
+    let (bin, args) = argv
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    let mut child = cmd.spawn()?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    // Drain stdout on a thread so a chatty command cannot fill the pipe and stall.
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("{bin} timed out");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let out = reader.join().unwrap_or_default();
+    if !status.success() {
+        anyhow::bail!("{bin} failed");
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 /// Run a command and return its stdout; a non-zero exit becomes an error
 /// carrying the first line of stderr.
 pub fn run(argv: &[&str]) -> anyhow::Result<String> {
@@ -263,6 +308,25 @@ mod tests {
     fn run_returns_stdout_and_errors_on_failure() {
         assert_eq!(run(&["echo", "hi"]).unwrap().trim(), "hi");
         assert!(run(&["false"]).is_err());
+    }
+
+    #[test]
+    fn run_timeout_kills_slow_commands() {
+        let started = std::time::Instant::now();
+        let out = run_timeout(&["sleep", "5"], None, std::time::Duration::from_millis(200));
+        assert!(out.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn run_timeout_returns_stdout() {
+        let out = run_timeout(
+            &["pwd"],
+            Some(std::path::Path::new("/")),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(out.trim(), "/");
     }
 
     #[test]

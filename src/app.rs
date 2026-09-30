@@ -85,6 +85,8 @@ pub struct App {
     /// Items sent for removal, in the order shown on the review screen.
     pub removal: Vec<Item>,
     pub spinner_tick: u64,
+    /// First line shown on the review screen.
+    pub review_scroll: usize,
     quit_after_removal: bool,
 }
 
@@ -109,6 +111,7 @@ impl App {
             progress: BTreeMap::new(),
             removal: Vec::new(),
             spinner_tick: 0,
+            review_scroll: 0,
             quit_after_removal: false,
         }
     }
@@ -181,14 +184,21 @@ impl App {
                 }
                 self.list_key(key)
             }
-            Screen::Review => {
-                if key.code == KeyCode::Char('y') && !ctrl_c {
-                    self.start_removal()
-                } else {
+            Screen::Review => match key.code {
+                KeyCode::Char('y') if !ctrl_c => self.start_removal(),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.review_scroll += 1;
+                    Action::None
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.review_scroll = self.review_scroll.saturating_sub(1);
+                    Action::None
+                }
+                _ => {
                     self.screen = Screen::List;
                     Action::None
                 }
-            }
+            },
             Screen::Removing => {
                 if ctrl_c || key.code == KeyCode::Char('q') {
                     self.quit_after_removal = true;
@@ -235,7 +245,10 @@ impl App {
                 self.editing_filter = true;
                 self.filter.get_or_insert_with(String::new);
             }
-            KeyCode::Enter if !self.selected.is_empty() => self.screen = Screen::Review,
+            KeyCode::Enter if !self.selected.is_empty() => {
+                self.review_scroll = 0;
+                self.screen = Screen::Review;
+            }
             _ => {}
         }
         Action::None
@@ -679,6 +692,25 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(a.screen, Screen::Removing);
+    }
+
+    #[test]
+    fn arrows_scroll_the_review_instead_of_leaving() {
+        let mut a = with_worktrees(vec![item(
+            1,
+            SourceId::Worktrees,
+            "w",
+            Some(1),
+            true,
+            false,
+        )]);
+        a.on_key(key(KeyCode::Enter));
+        a.on_key(key(KeyCode::Down));
+        a.on_key(ch('j'));
+        assert_eq!(a.screen, Screen::Review);
+        assert_eq!(a.review_scroll, 2);
+        a.on_key(key(KeyCode::Up));
+        assert_eq!(a.review_scroll, 1);
     }
 
     #[test]

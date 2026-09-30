@@ -1,14 +1,14 @@
 //! Git worktrees, both under the scanned folder and in coding-agent roots.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use ignore::WalkState;
 
 use crate::model::{Item, Removal, SourceId, Status};
 use crate::scan::artifacts::classify;
-use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, size_later};
+use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, run_timeout, size_later};
 
 /// A worktree is stale once its HEAD commit is this old.
 pub const STALE_DAYS: u32 = 14;
@@ -55,25 +55,22 @@ pub fn parse_porcelain(s: &str) -> Vec<WorktreeEntry> {
     entries
 }
 
+/// Longest a single git call may take before the worktree is reported as
+/// "status unknown" instead of stalling the whole scan.
+const GIT_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let argv: Vec<&str> = ["git", "-C", dir.to_str()?]
+        .into_iter()
+        .chain(args.iter().copied())
+        .collect();
+    run_timeout(&argv, None, GIT_TIMEOUT)
+        .ok()
+        .map(|out| out.trim().to_string())
 }
 
 fn git_ok(dir: &Path, args: &[&str]) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .is_ok_and(|o| o.status.success())
+    git(dir, args).is_some()
 }
 
 fn default_branch(main: &Path) -> Option<String> {
@@ -125,8 +122,7 @@ fn describe(
     label: String,
 ) -> Item {
     let lock = ctx.inuse.lock_for(wt);
-    let status_out = main.and_then(|_| git(wt, &["status", "--porcelain"]));
-    let (Some(main), Some(status_out)) = (main, status_out) else {
+    let Some(main) = main else {
         return Item {
             id: ctx.next_id(),
             source,
@@ -137,6 +133,31 @@ fn describe(
             lock,
             safe: false,
             removal: Removal::RemoveDir(wt.to_path_buf()),
+            age_days: None,
+        };
+    };
+    let removal = Removal::Command {
+        argv: vec![
+            "git".into(),
+            "worktree".into(),
+            "remove".into(),
+            wt.display().to_string(),
+        ],
+        cwd: Some(main.to_path_buf()),
+    };
+    // A failing or hanging `git status` says nothing about the worktree
+    // itself: never call it broken, never preselect it.
+    let Some(status_out) = git(wt, &["status", "--porcelain"]) else {
+        return Item {
+            id: ctx.next_id(),
+            source,
+            label,
+            path: Some(wt.to_path_buf()),
+            size: None,
+            status: vec![Status::Detail("status unknown".into())],
+            lock,
+            safe: false,
+            removal,
             age_days: None,
         };
     };
@@ -171,15 +192,7 @@ fn describe(
         status,
         safe: merged && dirty == 0 && lock.is_none(),
         lock,
-        removal: Removal::Command {
-            argv: vec![
-                "git".into(),
-                "worktree".into(),
-                "remove".into(),
-                wt.display().to_string(),
-            ],
-            cwd: Some(main.to_path_buf()),
-        },
+        removal,
         age_days: age,
     }
 }
@@ -613,6 +626,28 @@ mod tests {
                 ],
                 cwd: Some(root.join("r")),
             }
+        );
+    }
+
+    #[test]
+    fn failing_git_status_is_unknown_not_broken() {
+        let (_d, root, wt) = setup(true);
+        // A corrupt index makes `git status` fail while the main repo is fine.
+        let gitdir = std::fs::read_to_string(wt.join(".git")).unwrap();
+        let gitdir = PathBuf::from(gitdir.trim().trim_start_matches("gitdir: "));
+        fs::write(gitdir.join("index"), b"garbage").unwrap();
+        let items = run_folder(&ctx(&root, &root, InUse::default()));
+        assert!(
+            items[0]
+                .status
+                .contains(&Status::Detail("status unknown".into())),
+            "{:?}",
+            items[0].status
+        );
+        assert!(!items[0].status.contains(&Status::Broken));
+        assert!(!items[0].safe);
+        assert!(
+            matches!(&items[0].removal, Removal::Command { argv, .. } if argv[1] == "worktree")
         );
     }
 

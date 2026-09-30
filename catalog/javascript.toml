@@ -91,3 +91,13 @@ paths = ["~/Library/Caches/ms-playwright"]
 safe = false
 mode = "clear"
 source = "docs: https://playwright.dev/docs/browsers#managing-browser-binaries"
+
+[[rule]]
+id = "npm-prebuilds"
+group = "JavaScript"
+label = "npm prebuilt binaries"
+paths = ["~/.npm/_prebuilds"]
+safe = false
+mode = "clear"
+busy_when = ["npm", "npx"]
+source = "observed on disk"

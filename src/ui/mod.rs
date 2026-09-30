@@ -1,6 +1,7 @@
 //! Rendering. Every function here only reads the `App`.
 
 pub mod list;
+pub mod review;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -30,6 +31,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
     match app.screen {
         Screen::List => list::draw(f, app, area),
-        _ => list::draw(f, app, area),
+        Screen::Review => review::draw_review(f, app, area),
+        Screen::Removing | Screen::Done => review::draw_progress(f, app, area),
     }
 }

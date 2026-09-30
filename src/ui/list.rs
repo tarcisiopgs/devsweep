@@ -118,7 +118,10 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         let marker = if current { "▸ " } else { "  " };
         let total = source_total(app, source);
         let label_w = (inner.width as usize).saturating_sub(4 + total.width());
-        let label = format!("{:<label_w$}", source.label());
+        let label = format!(
+            "{:<label_w$}",
+            truncate(source.label(), label_w.saturating_sub(1))
+        );
         let empty = app.sources[&source].items.is_empty()
             && app.sources[&source].state == SourceState::Done;
         let style = if current && focused {
