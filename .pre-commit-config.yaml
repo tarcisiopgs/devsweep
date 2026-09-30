@@ -26,9 +26,12 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # Git runs hooks with GIT_DIR, GIT_INDEX_FILE and friends set. The tests
+      # create throwaway repos with git, so those variables must not leak into
+      # them, or they would write to this repository instead.
       - id: cargo-test
         name: cargo test
-        entry: cargo test --locked
+        entry: sh -c 'unset $(git rev-parse --local-env-vars); exec cargo test --locked'
         language: system
         pass_filenames: false
         always_run: true
