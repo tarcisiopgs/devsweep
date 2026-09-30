@@ -39,6 +39,8 @@ jobs:
           name="devsweep-${{ matrix.target }}"
           mkdir "$name"
           cp "target/${{ matrix.target }}/release/devsweep" README.md LICENSE "$name/"
+          mkdir "$name/assets"
+          cp assets/devsweep-banner.webp "$name/assets/"
           tar -cJf "$name.tar.xz" "$name"
           shasum -a 256 "$name.tar.xz" > "$name.tar.xz.sha256"
           gh release upload "$TAG" "$name.tar.xz" "$name.tar.xz.sha256" --clobber
@@ -90,6 +92,18 @@ jobs:
           done
           cd npm/devsweep
           cp ../../LICENSE ../../README.md .
+          # npm renders the README outside the repository; resolve local links
+          # against this release so its banner and reference links still work.
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tag = process.env.TAG;
+          const repo = 'https://github.com/tarcisiopgs/devsweep';
+          const readme = fs.readFileSync('README.md', 'utf8')
+            .replace('(assets/devsweep-banner.webp)', `(https://raw.githubusercontent.com/tarcisiopgs/devsweep/${tag}/assets/devsweep-banner.webp)`)
+            .replaceAll('(CONTRIBUTING.md)', `(${repo}/blob/${tag}/CONTRIBUTING.md)`)
+            .replaceAll('(LICENSE)', `(${repo}/blob/${tag}/LICENSE)`);
+          fs.writeFileSync('README.md', readme);
+          NODE
           npm pkg set version="$VERSION" \
             "optionalDependencies.devsweep-darwin-arm64=$VERSION" \
             "optionalDependencies.devsweep-darwin-x64=$VERSION"
