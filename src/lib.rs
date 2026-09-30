@@ -1,3 +1,4 @@
+pub mod app;
 pub mod fsutil;
 pub mod inuse;
 pub mod model;

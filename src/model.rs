@@ -111,7 +111,7 @@ fn quote(s: &str) -> String {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub id: ItemId,
     pub source: SourceId,
