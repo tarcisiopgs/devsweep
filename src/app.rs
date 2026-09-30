@@ -9,6 +9,21 @@ use crate::model::{Item, ItemId, SourceId, format_size_long};
 use crate::remove::RemoveEvent;
 use crate::scan::ScanEvent;
 
+/// The terminal app's name from `$TERM_PROGRAM`, for prompts that point
+/// at its settings.
+pub fn terminal_name(term_program: Option<&str>) -> String {
+    match term_program {
+        Some("ghostty") => "Ghostty",
+        Some("iTerm.app") => "iTerm",
+        Some("Apple_Terminal") => "Terminal",
+        Some("vscode") => "Visual Studio Code",
+        Some("WezTerm") => "WezTerm",
+        Some("WarpTerminal") => "Warp",
+        _ => "your terminal",
+    }
+    .to_string()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     List,
@@ -45,6 +60,8 @@ pub enum Action {
     /// Skip the items not started yet, then quit.
     StopRemoval,
     Rescan,
+    /// Open System Settings on Privacy & Security › Full Disk Access.
+    OpenDiskAccessSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +110,10 @@ pub struct App {
     pub show_help: bool,
     /// Free disk space before and after the removal, when `df` answered.
     pub disk_free: (Option<u64>, Option<u64>),
+    /// The terminal app, named in the Full Disk Access prompt.
+    pub terminal: String,
+    /// The user already opened the Full Disk Access settings.
+    pub opened_settings: bool,
     quit_after_removal: bool,
 }
 
@@ -120,6 +141,8 @@ impl App {
             review_scroll: 0,
             show_help: false,
             disk_free: (None, None),
+            terminal: "your terminal".into(),
+            opened_settings: false,
             quit_after_removal: false,
         }
     }
@@ -246,6 +269,14 @@ impl App {
                 return Action::Rescan;
             }
             KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Char('o')
+                if self
+                    .focused_source()
+                    .is_some_and(|s| self.needs_disk_access(s)) =>
+            {
+                self.opened_settings = true;
+                return Action::OpenDiskAccessSettings;
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_cursor(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_cursor(1),
             KeyCode::Tab | KeyCode::BackTab => {
@@ -392,6 +423,17 @@ impl App {
     /// Sources in display order: folder sources first, then machine ones.
     pub fn visible_sources(&self) -> Vec<SourceId> {
         self.sources.keys().copied().collect()
+    }
+
+    /// The source failed, or skipped folders, because macOS refused access:
+    /// only Full Disk Access for the terminal fixes that.
+    pub fn needs_disk_access(&self, source: SourceId) -> bool {
+        let Some(view) = self.sources.get(&source) else {
+            return false;
+        };
+        let denied = |m: &str| m.contains("permission denied") || m.contains("no permission");
+        matches!(&view.state, SourceState::Failed(m) if denied(m))
+            || view.notes.iter().any(|n| denied(n))
     }
 
     pub fn focused_source(&self) -> Option<SourceId> {
@@ -857,6 +899,40 @@ mod tests {
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item");
         a.on_remove(RemoveEvent::Err(2, "boom".into()));
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item · 1 failed");
+    }
+
+    #[test]
+    fn o_opens_disk_access_settings_only_for_a_source_blocked_by_permissions() {
+        let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash, SourceId::Docker]);
+        a.on_scan(ScanEvent::Failed(
+            SourceId::Trash,
+            "permission denied reading ~/.Trash".into(),
+        ));
+        assert!(a.needs_disk_access(SourceId::Trash));
+        assert!(!a.needs_disk_access(SourceId::Docker));
+        // Sources follow SourceId order: Docker first, then Trash.
+        assert_eq!(a.on_key(ch('o')), Action::None, "Docker is not blocked");
+        assert!(!a.opened_settings);
+        a.on_key(key(KeyCode::Down));
+        assert_eq!(a.on_key(ch('o')), Action::OpenDiskAccessSettings);
+        assert!(a.opened_settings);
+    }
+
+    #[test]
+    fn terminal_name_comes_from_term_program() {
+        assert_eq!(terminal_name(Some("ghostty")), "Ghostty");
+        assert_eq!(terminal_name(Some("Apple_Terminal")), "Terminal");
+        assert_eq!(terminal_name(None), "your terminal");
+    }
+
+    #[test]
+    fn a_permission_note_also_counts_as_blocked() {
+        let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Artifacts]);
+        a.on_scan(ScanEvent::Note(
+            SourceId::Artifacts,
+            "3 folders skipped (no permission)".into(),
+        ));
+        assert!(a.needs_disk_access(SourceId::Artifacts));
     }
 
     #[test]

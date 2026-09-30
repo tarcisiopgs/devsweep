@@ -67,6 +67,7 @@ downloads everything again, so they are listed and left for you to decide.
 | `/` | filter |
 | `r` | scan again |
 | `?` | key and mark legend |
+| `o` | open the Full Disk Access settings, when a source needs it |
 | `⏎` | review what will be removed |
 | `y` | confirm on the review screen |
 | `q` | quit |
