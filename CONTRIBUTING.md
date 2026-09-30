@@ -38,3 +38,14 @@ cargo fmt
 ```
 
 TUI changes come with `insta` snapshots: run `cargo insta review` and check every snapshot against the design before accepting it.
+
+## Releasing
+
+1. Bump `version` in `Cargo.toml` (and `Cargo.lock` with `cargo check`) in a pull request, and merge it.
+2. Publish a GitHub Release whose tag is that version with a `v` prefix:
+
+   ```sh
+   gh release create v0.2.0 --generate-notes
+   ```
+
+The `Release` workflow checks that the tag matches `Cargo.toml`, attaches the macOS archives to the release and publishes `@tarcisiopgs/devsweep`, `devsweep-darwin-arm64` and `devsweep-darwin-x64` to npm through trusted publishing. No npm token is involved.
