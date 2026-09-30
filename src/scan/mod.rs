@@ -1,6 +1,7 @@
 //! Scanner contract and parallel orchestration.
 
 pub mod artifacts;
+pub mod ios;
 pub mod worktrees;
 
 use std::collections::HashSet;
