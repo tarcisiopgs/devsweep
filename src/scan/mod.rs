@@ -1,5 +1,7 @@
 //! Scanner contract and parallel orchestration.
 
+pub mod artifacts;
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::process::Command;
