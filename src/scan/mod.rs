@@ -22,6 +22,8 @@ use crate::fsutil::dir_size;
 use crate::inuse::InUse;
 use crate::model::{Item, ItemId, SourceId};
 
+// Found dominates the traffic anyway; boxing it would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum ScanEvent {
     Found(Item),
     Size(ItemId, u64),
