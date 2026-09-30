@@ -1,0 +1,3 @@
+Would remove: /Users/u/Library/Caches/Homebrew/node--22.9.0... (20.1MB)
+Would remove: /Users/u/Library/Caches/Homebrew/downloads/02c8--Proxyman_26.0.1.dmg (760.1MB)
+==> This operation would free approximately 780.2MB of disk space.

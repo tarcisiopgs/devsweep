@@ -1,0 +1,59 @@
+[[rule]]
+id = "xcode-derived-data"
+group = "Apple"
+label = "Xcode DerivedData"
+paths = ["~/Library/Developer/Xcode/DerivedData"]
+safe = true
+mode = "clear"
+busy_when = ["Xcode", "xcodebuild"]
+source = "observed on disk"
+
+[[rule]]
+id = "xcode-products"
+group = "Apple"
+label = "Xcode build products"
+paths = ["~/Library/Developer/Xcode/Products"]
+safe = true
+mode = "clear"
+busy_when = ["Xcode", "xcodebuild"]
+source = "observed on disk"
+
+[[rule]]
+id = "xcode-ib-support"
+group = "Apple"
+label = "Interface Builder cache"
+paths = ["~/Library/Developer/Xcode/UserData/IB Support"]
+safe = true
+mode = "clear"
+busy_when = ["Xcode"]
+source = "observed on disk"
+
+[[rule]]
+id = "coresim-caches"
+group = "Apple"
+label = "Simulator system cache"
+paths = ["~/Library/Developer/CoreSimulator/Caches"]
+safe = true
+mode = "clear"
+busy_when = ["Simulator"]
+source = "observed on disk"
+
+[[rule]]
+id = "coresim-logs"
+group = "Apple"
+label = "CoreSimulator logs"
+paths = ["~/Library/Logs/CoreSimulator"]
+safe = true
+mode = "clear"
+busy_when = ["Simulator"]
+source = "observed on disk"
+
+[[rule]]
+id = "clang-module-cache"
+group = "Apple"
+label = "Clang module cache"
+paths = ["{darwin_cache}/clang"]
+safe = true
+mode = "clear"
+busy_when = ["Xcode", "xcodebuild", "clang"]
+source = "observed on disk (getconf DARWIN_USER_CACHE_DIR)"

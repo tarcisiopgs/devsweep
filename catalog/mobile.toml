@@ -1,0 +1,37 @@
+[[rule]]
+id = "expo-go"
+group = "Mobile"
+label = "Expo Go downloads"
+paths = ["~/.expo/expo-go", "~/.expo/android-apk-cache"]
+safe = false
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "expo-metadata"
+group = "Mobile"
+label = "Expo metadata cache"
+paths = ["~/.expo/native-modules-cache", "~/.expo/schema-cache", "~/.expo/versions-cache"]
+safe = true
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "android-sdk-cache"
+group = "Mobile"
+label = "Android SDK manager cache"
+paths = ["~/.android/cache"]
+safe = true
+mode = "clear"
+busy_when = ["studio", "sdkmanager"]
+source = "observed on disk"
+
+[[rule]]
+id = "cocoapods"
+group = "Mobile"
+label = "CocoaPods cache"
+paths = ["~/Library/Caches/CocoaPods"]
+safe = false
+mode = "clear"
+busy_when = ["pod"]
+source = "docs: https://guides.cocoapods.org/terminal/commands.html#pod_cache_clean"

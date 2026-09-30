@@ -56,7 +56,7 @@ impl InUse {
     /// Snapshot of every process cwd. Any failure yields an empty map.
     pub fn collect() -> InUse {
         let output = Command::new("lsof")
-            .args(["-a", "-d", "cwd", "-Fpcn"])
+            .args(["+c0", "-a", "-d", "cwd", "-Fpcn"])
             .output();
         let parsed = match output {
             Ok(out) => InUse::parse(&String::from_utf8_lossy(&out.stdout)),

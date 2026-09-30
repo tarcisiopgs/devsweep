@@ -1,0 +1,44 @@
+[[rule]]
+id = "claude-desktop-cache"
+group = "AI tools"
+label = "Claude desktop cache"
+paths = [
+  "~/Library/Application Support/Claude/Cache",
+  "~/Library/Application Support/Claude/Code Cache",
+  "~/Library/Application Support/Claude/GPUCache",
+  "~/Library/Application Support/Claude/DawnGraphiteCache",
+  "~/Library/Application Support/Claude/DawnWebGPUCache",
+]
+safe = true
+mode = "clear"
+busy_when = ["Claude"]
+source = "observed on disk (Electron cache folders)"
+
+[[rule]]
+id = "claude-cli-cache"
+group = "AI tools"
+label = "Claude Code cache"
+paths = ["~/Library/Caches/claude-cli-nodejs"]
+safe = true
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "codex-desktop-cache"
+group = "AI tools"
+label = "Codex desktop cache"
+paths = ["~/Library/Caches/Codex"]
+safe = true
+mode = "clear"
+busy_when = ["Codex"]
+source = "observed on disk (Electron cache folders)"
+
+[[rule]]
+id = "opencode-cache"
+group = "AI tools"
+label = "OpenCode cache"
+paths = ["~/.cache/opencode"]
+safe = false
+mode = "clear"
+busy_when = ["opencode"]
+source = "observed on disk"

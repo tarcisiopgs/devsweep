@@ -1,0 +1,47 @@
+[[rule]]
+id = "mise-cache"
+group = "Tools"
+label = "mise cache"
+paths = ["~/Library/Caches/mise"]
+safe = false
+mode = "clear"
+command = ["mise", "cache", "clear"]
+requires_bin = "mise"
+source = "docs: https://mise.jdx.dev/cli/cache/clear.html"
+
+[[rule]]
+id = "gh-cache"
+group = "Tools"
+label = "GitHub CLI cache"
+paths = ["~/.cache/gh"]
+safe = true
+mode = "clear"
+busy_when = ["gh"]
+source = "observed on disk"
+
+[[rule]]
+id = "gcloud-logs"
+group = "Tools"
+label = "Google Cloud CLI logs"
+paths = ["~/.config/gcloud/logs"]
+safe = true
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "azure-logs"
+group = "Tools"
+label = "Azure CLI logs"
+paths = ["~/.azure/logs"]
+safe = true
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "oh-my-zsh-cache"
+group = "Tools"
+label = "Oh My Zsh cache"
+paths = ["~/.oh-my-zsh/cache"]
+safe = true
+mode = "clear"
+source = "observed on disk"

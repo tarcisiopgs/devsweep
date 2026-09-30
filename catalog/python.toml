@@ -1,0 +1,32 @@
+[[rule]]
+id = "pip"
+group = "Python"
+label = "pip cache"
+paths = ["~/Library/Caches/pip"]
+safe = false
+mode = "clear"
+source = "docs: https://pip.pypa.io/en/stable/topics/caching/"
+
+[[rule]]
+id = "uv"
+group = "Python"
+label = "uv cache"
+paths = ["~/.cache/uv"]
+safe = false
+mode = "clear"
+command = ["uv", "cache", "prune"]
+requires_bin = "uv"
+busy_when = ["uv"]
+source = "docs: https://docs.astral.sh/uv/concepts/cache/"
+
+[[rule]]
+id = "pre-commit"
+group = "Python"
+label = "pre-commit environments"
+paths = ["~/.cache/pre-commit"]
+safe = false
+mode = "clear"
+command = ["pre-commit", "gc"]
+requires_bin = "pre-commit"
+busy_when = ["pre-commit"]
+source = "docs: https://pre-commit.com/#pre-commit-gc"

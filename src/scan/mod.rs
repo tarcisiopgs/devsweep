@@ -2,9 +2,12 @@
 
 pub mod android;
 pub mod artifacts;
+pub mod catalog;
 pub mod docker;
+pub mod homebrew;
 pub mod ios;
 pub mod worktrees;
+pub mod xcode;
 
 use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -78,8 +81,21 @@ pub trait Scanner: Send + Sync {
 }
 
 /// Every scanner that ships with devsweep.
-pub fn all_scanners() -> Vec<Box<dyn Scanner>> {
-    vec![]
+pub fn all_scanners(home: &std::path::Path) -> Vec<Box<dyn Scanner>> {
+    let mut scanners: Vec<Box<dyn Scanner>> = vec![
+        Box::new(artifacts::Artifacts),
+        Box::new(worktrees::Worktrees),
+        Box::new(worktrees::AgentWorktrees::for_home(home)),
+        Box::new(ios::Ios),
+        Box::new(android::Android::detect(home)),
+        Box::new(docker::Docker),
+        Box::new(xcode::Xcode),
+        Box::new(homebrew::Homebrew),
+    ];
+    if let Ok(catalog) = catalog::Catalog::load() {
+        scanners.push(Box::new(catalog));
+    }
+    scanners
 }
 
 /// Run each available scanner on its own thread. Every scanner ends with
