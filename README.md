@@ -1,42 +1,68 @@
 # devsweep
 
-Find and remove what a developer's Mac accumulates, in one terminal UI:
-project build artifacts, git worktrees left behind by coding agents, iOS
-simulators, Android emulators, Docker leftovers and dev tool caches.
+![devsweep — reclaim space from developer clutter on macOS](assets/devsweep-banner.webp)
+
+**Reclaim disk space from your developer toolchain, in one terminal UI.**
+
+Projects leave behind build artifacts. Coding agents leave worktrees. Mobile
+toolchains, Docker and package managers keep accumulating data. devsweep brings
+it into one place: see the size and status of each item, choose what can go,
+and review the removal commands before confirming.
+
+Built with Rust and ratatui. **macOS only**, on Apple silicon and Intel. MIT licensed.
+
+## Quick start
 
 ```sh
 npx @tarcisiopgs/devsweep            # scan the current folder and the machine
-npx @tarcisiopgs/devsweep ~/code     # scan another folder
+npx @tarcisiopgs/devsweep ~/code     # scan another projects folder
 ```
 
-Or install it once and run `devsweep`:
+Or install it once:
 
 ```sh
 npm install -g @tarcisiopgs/devsweep
+devsweep ~/code
 ```
 
-macOS only (Apple silicon and Intel).
+Node.js and npm are needed for the npm launcher. devsweep itself runs as a
+native binary. You can also download a macOS binary from
+[GitHub Releases](https://github.com/tarcisiopgs/devsweep/releases/latest),
+or build from source with `cargo build --release`.
 
-## Why another cleaner
+## From scan to cleanup
 
-Most cleaners either target one thing (`node_modules`) or clean a fixed list
-of caches in bulk. devsweep understands the lifecycle of what developers
-create, and lets you act item by item:
+1. **Scan.** Project artifacts and repository worktrees appear under **This
+   folder**. Caches, mobile toolchains, Docker and agent worktrees appear under
+   **Machine**. Results arrive while sizes are still being calculated.
+2. **Choose.** Browse sources, sort by size or age, and select individual items.
+   Detected live processes, booted simulators and running emulators lock affected
+   items so they cannot be selected.
+3. **Review.** Press `enter` to see the selection, total size and removal commands.
+   Press `esc` to go back or `y` to confirm. Each item is checked again before removal.
 
-- **Worktrees** show whether they are merged, dirty or stale, and a worktree
-  with a live process inside it (an agent, a shell, an editor) is **locked**
-  and cannot be selected.
-- **Simulators and emulators** show when they were last used; a booted
-  simulator or running emulator is locked.
-- **Docker** volumes that no container uses are listed, but never preselected:
-  they may hold a database.
-- Everything is removed with the tool's own command when one exists
-  (`git worktree remove`, `xcrun simctl delete`, `avdmanager delete avd`,
-  `docker … prune`, `pnpm store prune`, `brew cleanup`, Finder's empty trash).
-- Nothing is deleted before a review screen that shows the total and the
-  exact commands. Each item is checked again right before removal.
+## Know what you are removing
+
+- **Worktrees have context.** See merged, dirty and stale status. Worktrees with
+  unknown Git status are locked; eligible clean, merged worktrees can be preselected.
+- **Preselected does not mean “everything disposable.”** Project artifacts,
+  Android AVDs, iOS runtimes, Docker volumes, Xcode archives and the Trash are
+  left for you to choose.
+- **Native cleanup commands are preferred.** devsweep uses commands such as
+  `git worktree remove`, `xcrun simctl delete`, `avdmanager delete avd`,
+  `pnpm store prune` and `brew cleanup` when available.
+- **The review is the decision point.** Scanning does not delete anything.
+  Results that arrive after you open the review cannot join that selection.
+
+Cleanup is destructive. An unused Docker volume may contain a database; a
+worktree may contain files you still need. Check the selected items and commands
+before pressing `y`.
 
 ## What it finds
+
+Sources appear when the relevant tools are installed. Some locations, including
+the Trash, may need Full Disk Access for your terminal; devsweep shows a prompt
+when access is missing.
 
 | Source | Section | Preselected when |
 |---|---|---|
@@ -48,7 +74,7 @@ create, and lets you act item by item:
 | Docker dangling images, build cache, unused images, stopped containers, orphan volumes | Machine | dangling images and build cache |
 | Dev tool caches (npm, pnpm, bun, Yarn, pip, uv, Go, Cargo, Gradle, RubyGems, Expo, CocoaPods, Xcode, Clang, Playwright, Claude, Codex…) | Machine | the cache regenerates and costs nothing to rebuild |
 | Xcode device support files and archives | Machine | never |
-| Homebrew cleanup | Machine | always |
+| Homebrew cleanup | Machine | unlocked |
 | The Trash, including mounted volumes' (emptied by Finder) | Machine | never |
 
 **Safe** means: it regenerates by itself, nothing is lost, and recreating it
@@ -70,26 +96,30 @@ downloads everything again, so they are listed and left for you to decide.
 | `o` | open the Full Disk Access settings, when a source needs it |
 | `⏎` | review what will be removed |
 | `y` | confirm on the review screen |
-| `q` | quit |
+| `esc` | go back from review |
+| `q` / `ctrl-c` | quit; during removal, stop after the current item |
 
 When a removal finishes, devsweep posts a macOS notification with the result.
 Pass `--no-notify` to turn it off.
 
-## How it compares
+## Scope
 
-- [npkill](https://github.com/voidcosmos/npkill) and
-  [kondo](https://github.com/tbillington/kondo) are great at project
-  artifacts; devsweep covers them and adds the machine-level sources.
-- [Mole](https://github.com/tw93/Mole) is a broad Mac cleaner (apps,
-  browsers, system caches, uninstalls). Its dev cleanup runs in bulk and it
-  only reports simulators, Docker volumes and agent worktrees. devsweep is
-  narrower, focused on developer resources, and acts on those item by item.
-  They work well together.
+Use devsweep when disk space is tied up in projects, coding-agent worktrees or
+development tools. It combines project cleanup and machine cleanup in one
+interactive workflow.
+
+For tools focused on project artifacts, see
+[npkill](https://github.com/voidcosmos/npkill) and
+[kondo](https://github.com/tbillington/kondo). For broader Mac maintenance, see
+[Mole](https://github.com/tw93/Mole). devsweep focuses on developer resources
+and the Trash; browser cleanup and app uninstallation are outside its scope.
 
 ## Contributing
 
-Cache rules are data in `catalog/*.toml`; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Add a dev tool cache by writing a rule in `catalog/*.toml`, or contribute a
+scanner for another source. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+catalog schema, safety rules and development commands.
 
 ## License
 
-MIT
+[MIT](LICENSE)
