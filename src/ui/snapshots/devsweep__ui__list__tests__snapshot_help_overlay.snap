@@ -1,15 +1,16 @@
 ---
 source: src/ui/list.rs
+assertion_line: 722
 expression: "render(&a, 100, 24).backend()"
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
 "│ ── this folder ───────────────│ Worktrees  1.5 GB · 5 items                           sort: size │"
 "│  Artifacts  █████▉    14.2 GB │ ──────────────────────────────────────────────────────────────── │"
-"│▌ Worktrees  ▋     ┌ help · any key closes ───────────────────────────────────┐fe ██████   412 MB │"
-"│                   │  ↑↓ j k     move                                         │fe █████▋   388 MB │"
-"│ ── machine ───────│  tab ← →    switch between sources and items             │   ████▍    301 MB │"
-"│  iOS        ██████│  space      select or unselect the item                  │   ████▏    290 MB │"
-"│  Android          │  a          select every unlocked item of the source     │   █▍        95 MB │"
+"│▌ Worktrees  ▋     ┌ help · any key closes ───────────────────────────────────┐an · safe   412 MB │"
+"│                   │  ↑↓ j k     move                                         │an · safe   388 MB │"
+"│ ── machine ───────│  tab ← →    switch between sources and items             │les         301 MB │"
+"│  iOS        ██████│  space      select or unselect the item                  │ 4821       290 MB │"
+"│  Android          │  a          select every unlocked item of the source     │e 41d        95 MB │"
 "│  Docker           │  s          sort by size, name or age                    │                   │"
 "│  Dev caches ███▍  │  /          filter by name                               │                   │"
 "│                   │  r          scan again                                   │                   │"

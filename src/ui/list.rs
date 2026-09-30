@@ -14,7 +14,6 @@ const SIDE_BAR_W: usize = 8;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Width of a size column: "999.9 GB".
 pub const SIZE_W: usize = 8;
-const ROW_BAR_W: usize = 6;
 
 fn yellow() -> Style {
     Style::default().fg(Color::Yellow)
@@ -369,9 +368,7 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
     let rows = (area.height as usize).saturating_sub(lines.len());
     let offset = app.cursor_item.saturating_sub(rows.saturating_sub(1));
     let status_w = ((area.width as usize) / 3).min(30);
-    let label_w =
-        (area.width as usize).saturating_sub(4 + 2 + status_w + 1 + ROW_BAR_W + 1 + SIZE_W);
-    let max = items.iter().filter_map(|i| i.size).max().unwrap_or(0);
+    let label_w = (area.width as usize).saturating_sub(4 + 2 + status_w + 1 + SIZE_W);
     for (i, item) in items.iter().enumerate().skip(offset).take(rows) {
         let is_cursor = focused && i == app.cursor_item;
         let selected = app.selected.contains(&item.id);
@@ -410,11 +407,6 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
             Span::raw("  "),
         ];
         spans.extend(status);
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            bar(item.size.unwrap_or(0), max, ROW_BAR_W),
-            value_style,
-        ));
         spans.push(Span::styled(format!(" {size:>SIZE_W$}"), value_style));
         let mut line = Line::from(spans);
         if locked {
