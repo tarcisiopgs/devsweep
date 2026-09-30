@@ -2,6 +2,7 @@
 
 pub mod android;
 pub mod artifacts;
+pub mod docker;
 pub mod ios;
 pub mod worktrees;
 
