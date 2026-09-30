@@ -12,6 +12,8 @@ use crate::model::{Item, Section, SourceId, Status, format_size_long};
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Width of a size column: "999.9 GB".
 pub const SIZE_W: usize = 8;
+/// Width of a source's total in the sidebar: a size or "no access".
+const TOTAL_W: usize = 9;
 
 fn yellow() -> Style {
     Style::default().fg(Color::Yellow)
@@ -31,10 +33,9 @@ pub fn spinner(app: &App) -> &'static str {
 }
 
 /// What the user can do about a scan failure or note, if anything.
+/// Permission failures get their own prompt, see [`access_lines`].
 pub fn recovery(msg: &str) -> Option<&'static str> {
-    if msg.contains("permission") {
-        Some("Allow Full Disk Access for your terminal, then press r.")
-    } else if msg.contains("daemon stopped") {
+    if msg.contains("daemon stopped") {
         Some("Start Docker Desktop, then press r to scan again.")
     } else {
         None
@@ -93,15 +94,22 @@ fn source_total(app: &App, source: SourceId) -> Span<'static> {
     let view = &app.sources[&source];
     let text = match &view.state {
         SourceState::Scanning => {
-            return Span::styled(format!("{:>SIZE_W$}", spinner(app)), yellow());
+            return Span::styled(format!("{:>TOTAL_W$}", spinner(app)), yellow());
+        }
+        // A missing permission is not a failure of the tool.
+        SourceState::Failed(_) if app.needs_disk_access(source) => {
+            return Span::styled(
+                format!("{:>TOTAL_W$}", "no access"),
+                Style::default().fg(Color::Cyan),
+            );
         }
         SourceState::Failed(_) => {
             return Span::styled(
-                format!("{:>SIZE_W$}", "error"),
+                format!("{:>TOTAL_W$}", "error"),
                 Style::default().fg(Color::Red),
             );
         }
-        SourceState::Done => format!("{:>SIZE_W$}", format_size_long(app.source_total(source))),
+        SourceState::Done => format!("{:>TOTAL_W$}", format_size_long(app.source_total(source))),
     };
     if view.items.is_empty() {
         Span::styled(text, dim())
@@ -120,7 +128,7 @@ fn label_width(app: &App) -> usize {
 
 /// Gutter, label and size, plus the right border.
 fn sidebar_width(app: &App) -> u16 {
-    (2 + label_width(app) + 2 + SIZE_W + 1 + 1) as u16
+    (2 + label_width(app) + 2 + TOTAL_W + 1 + 1) as u16
 }
 
 /// Sources with their size; the focused one gets a gutter mark.
@@ -314,16 +322,27 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::styled("─".repeat(area.width as usize), dim()),
     ];
-    if let SourceState::Failed(msg) = &view.state {
-        lines.push(Line::styled(msg.clone(), Style::default().fg(Color::Red)));
-        let hint = recovery(msg).unwrap_or("Press r to scan again.");
-        lines.push(Line::styled(hint, dim()));
+    let blocked = app.needs_disk_access(source);
+    match &view.state {
+        SourceState::Failed(_) if blocked => {}
+        SourceState::Failed(msg) => {
+            lines.push(Line::styled(msg.clone(), Style::default().fg(Color::Red)));
+            let hint = recovery(msg).unwrap_or("Press r to scan again.");
+            lines.push(Line::styled(hint, dim()));
+        }
+        _ => {}
     }
     for note in &view.notes {
         lines.push(Line::styled(note.clone(), dim()));
         if let Some(hint) = recovery(note) {
             lines.push(Line::styled(hint, dim()));
         }
+    }
+    if blocked {
+        if !view.notes.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(access_lines(app, source));
     }
     // A failure or a note already says why the list is empty.
     let explained = matches!(view.state, SourceState::Failed(_)) || !view.notes.is_empty();
@@ -389,6 +408,45 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
+/// The Full Disk Access prompt: why, whose permission, and the one key
+/// that opens the right settings pane. Access only applies after the
+/// terminal restarts, so the copy never promises that `r` is enough.
+fn access_lines(app: &App, source: SourceId) -> Vec<Line<'static>> {
+    let what = match source {
+        SourceId::Trash => "the Trash",
+        _ => "every folder here",
+    };
+    let term = &app.terminal;
+    let mut subject = term.clone();
+    if let Some(first) = subject.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    let (action, then) = if app.opened_settings {
+        (
+            "open System Settings › Full Disk Access again".to_string(),
+            format!("Opened. After turning {term} on, quit it and run devsweep again."),
+        )
+    } else {
+        (
+            "open System Settings › Full Disk Access".to_string(),
+            format!("turn {term} on, then quit it and run devsweep again"),
+        )
+    };
+    vec![
+        Line::styled(
+            format!("macOS only lets apps with Full Disk Access read {what}."),
+            white(),
+        ),
+        Line::styled(format!("{subject} doesn't have it yet."), white()),
+        Line::default(),
+        Line::from(vec![
+            Span::styled("o  ", yellow().add_modifier(Modifier::BOLD)),
+            Span::styled(action, white()),
+        ]),
+        Line::styled(format!("   {then}"), dim()),
+    ]
+}
+
 fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let (n, bytes) = app.selected_total();
     let keys = "space toggle · ⏎ review · ? help · a all · s sort · / filter · q quit";
@@ -428,6 +486,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         key("s", "sort by size, name or age"),
         key("/", "filter by name"),
         key("r", "scan again"),
+        key("o", "open Full Disk Access settings, when asked"),
         key("⏎", "review what will be removed"),
         key("q", "quit"),
         Line::default(),
@@ -646,6 +705,31 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_trash_without_disk_access() {
+        let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
+        a.terminal = "Ghostty".into();
+        a.on_scan(ScanEvent::Failed(
+            SourceId::Trash,
+            "permission denied reading ~/.Trash".into(),
+        ));
+        a.on_scan(ScanEvent::Done(SourceId::Trash));
+        insta::assert_snapshot!(render(&a, 100, 12).backend());
+    }
+
+    #[test]
+    fn snapshot_trash_after_opening_settings() {
+        let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
+        a.terminal = "Ghostty".into();
+        a.on_scan(ScanEvent::Failed(
+            SourceId::Trash,
+            "permission denied reading ~/.Trash".into(),
+        ));
+        a.on_scan(ScanEvent::Done(SourceId::Trash));
+        a.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+        insta::assert_snapshot!(render(&a, 100, 12).backend());
+    }
+
+    #[test]
     fn snapshot_docker_daemon_stopped_note() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Docker]);
         a.on_scan(ScanEvent::Note(SourceId::Docker, "daemon stopped".into()));
@@ -666,16 +750,12 @@ mod tests {
     #[test]
     fn failures_and_notes_carry_their_next_step() {
         assert!(
-            super::recovery("permission denied")
-                .unwrap()
-                .contains("Full Disk Access")
-        );
-        assert!(super::recovery("3 folders skipped (no permission)").is_some());
-        assert!(
             super::recovery("daemon stopped")
                 .unwrap()
                 .contains("Docker Desktop")
         );
+        // Permission problems get the Full Disk Access prompt instead.
+        assert_eq!(super::recovery("permission denied"), None);
         assert_eq!(super::recovery("something else"), None);
     }
 

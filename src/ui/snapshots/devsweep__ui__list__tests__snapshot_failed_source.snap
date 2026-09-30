@@ -1,17 +1,17 @@
 ---
 source: src/ui/list.rs
-assertion_line: 645
+assertion_line: 704
 expression: "render(&a, 100, 12).backend()"
 ---
 "┌ devsweep ─ /w ───────────────────────────────────────────────────────────────────────────────────┐"
-"│ ── this folder ──────│ Artifacts                                                      sort: size │"
-"│▌ Artifacts     error │ ───────────────────────────────────────────────────────────────────────── │"
-"│                      │ permission denied                                                         │"
-"│                      │ Allow Full Disk Access for your terminal, then press r.                   │"
-"│                      │                                                                           │"
-"│                      │                                                                           │"
-"│                      │                                                                           │"
-"│                      │                                                                           │"
+"│ ── this folder ───────│ Artifacts                                                     sort: size │"
+"│▌ Artifacts  no access │ ──────────────────────────────────────────────────────────────────────── │"
+"│                       │ macOS only lets apps with Full Disk Access read every folder here.       │"
+"│                       │ Your terminal doesn't have it yet.                                       │"
+"│                       │                                                                          │"
+"│                       │ o  open System Settings › Full Disk Access                               │"
+"│                       │    turn your terminal on, then quit it and run devsweep again            │"
+"│                       │                                                                          │"
 "│──────────────────────────────────────────────────────────────────────────────────────────────────│"
 "│ 0 selected · 0 B   space toggle · ⏎ review · ? help · a all · s sort · / filter · q quit         │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

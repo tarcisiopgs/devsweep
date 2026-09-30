@@ -9,7 +9,7 @@ use crossbeam_channel::{Receiver, TryRecvError, unbounded};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 
-use devsweep::app::{Action, App, Screen};
+use devsweep::app::{Action, App, Screen, terminal_name};
 use devsweep::fsutil::disk_free;
 use devsweep::inuse::InUse;
 use devsweep::model::Item;
@@ -28,6 +28,9 @@ struct Cli {
     #[arg(long)]
     no_notify: bool,
 }
+
+const DISK_ACCESS_URL: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -113,6 +116,7 @@ fn run_app(
 ) -> anyhow::Result<()> {
     let (app, mut scan_rx) = start_scan(&target, &home, None);
     let mut app = app.expect("fresh app");
+    app.terminal = terminal_name(std::env::var("TERM_PROGRAM").ok().as_deref());
     let mut remove_rx: Option<(Receiver<RemoveEvent>, Arc<AtomicBool>)> = None;
 
     loop {
@@ -163,6 +167,14 @@ fn run_app(
             Action::StartRemoval(items) => {
                 app.disk_free.0 = disk_free(&home);
                 remove_rx = Some(start_removal(items, &target, &home));
+            }
+            Action::OpenDiskAccessSettings => {
+                // Opens System Settings on Privacy & Security › Full Disk Access.
+                let _ = std::process::Command::new("open")
+                    .arg(DISK_ACCESS_URL)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
             }
             Action::StopRemoval => {
                 if let Some((_, stop)) = &remove_rx {
