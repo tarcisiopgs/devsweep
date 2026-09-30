@@ -18,7 +18,7 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@devsweep/darwin-arm64": "0.0.0",
-    "@devsweep/darwin-x64": "0.0.0"
+    "devsweep-darwin-arm64": "0.0.0",
+    "devsweep-darwin-x64": "0.0.0"
   }
 }

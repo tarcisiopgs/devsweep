@@ -30,13 +30,25 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Trusted publishing (OIDC) needs npm 11.5 or newer; no token is stored anywhere.
+      - run: npm install -g npm@latest
       - name: Build and publish packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TAG: ${{ fromJson(inputs.plan).announcement_tag }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
+          # Re-running a release must not fail on versions already on npm.
+          publish() {
+            local name version
+            name=$(node -p "require('./package.json').name")
+            version=$(node -p "require('./package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published, skipping"
+            else
+              npm publish --provenance --access public
+            fi
+          }
           for pair in "arm64:aarch64-apple-darwin" "x64:x86_64-apple-darwin"; do
             ARCH="${pair%%:*}"; TARGET="${pair#*:}"
             mkdir -p "pkg-$ARCH/bin"
@@ -45,11 +57,11 @@ jobs:
             chmod +x "pkg-$ARCH/bin/devsweep"
             ARCH="$ARCH" VERSION="$VERSION" envsubst < npm/platform/package.json.tmpl > "pkg-$ARCH/package.json"
             cp LICENSE "pkg-$ARCH/"
-            (cd "pkg-$ARCH" && npm publish --provenance --access public)
+            (cd "pkg-$ARCH" && publish)
           done
           cd npm/devsweep
           cp ../../LICENSE ../../README.md .
           npm pkg set version="$VERSION" \
-            "optionalDependencies.@devsweep/darwin-arm64=$VERSION" \
-            "optionalDependencies.@devsweep/darwin-x64=$VERSION"
-          npm publish --provenance --access public
+            "optionalDependencies.devsweep-darwin-arm64=$VERSION" \
+            "optionalDependencies.devsweep-darwin-x64=$VERSION"
+          publish

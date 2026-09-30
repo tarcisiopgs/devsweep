@@ -5,7 +5,7 @@
 
 const { spawnSync } = require("node:child_process");
 
-const supported = { arm64: "@devsweep/darwin-arm64", x64: "@devsweep/darwin-x64" };
+const supported = { arm64: "devsweep-darwin-arm64", x64: "devsweep-darwin-x64" };
 const pkg = process.platform === "darwin" ? supported[process.arch] : undefined;
 
 if (!pkg) {
