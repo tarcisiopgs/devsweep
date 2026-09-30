@@ -1,12 +1,14 @@
 //! Scanner contract and parallel orchestration.
 
 pub mod artifacts;
+pub mod worktrees;
 
+use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 pub use crossbeam_channel::Sender;
 
@@ -26,6 +28,9 @@ pub struct ScanCtx {
     pub target: PathBuf,
     pub home: PathBuf,
     pub inuse: InUse,
+    /// Worktree paths already reported by the folder scan.
+    pub seen_worktrees: Mutex<HashSet<PathBuf>>,
+    worktrees_done: (Mutex<bool>, Condvar),
     ids: AtomicU64,
 }
 
@@ -35,7 +40,25 @@ impl ScanCtx {
             target,
             home,
             inuse,
+            seen_worktrees: Mutex::new(HashSet::new()),
+            worktrees_done: (Mutex::new(false), Condvar::new()),
             ids: AtomicU64::new(1),
+        }
+    }
+
+    /// Signal that the folder worktree scan finished (or never runs).
+    pub fn mark_worktrees_done(&self) {
+        let (lock, cvar) = &self.worktrees_done;
+        *lock.lock().unwrap() = true;
+        cvar.notify_all();
+    }
+
+    /// Block until the folder worktree scan finished.
+    pub fn wait_worktrees_done(&self) {
+        let (lock, cvar) = &self.worktrees_done;
+        let mut done = lock.lock().unwrap();
+        while !*done {
+            done = cvar.wait(done).unwrap();
         }
     }
 
