@@ -2,6 +2,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+/// lsof can block on a stale network mount; past this, everything stays locked.
+const LSOF_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug)]
 struct Proc {
@@ -14,6 +18,9 @@ struct Proc {
 pub struct InUse {
     procs: Vec<Proc>,
     home: Option<PathBuf>,
+    /// Why the process snapshot could not be taken. When set, every path and
+    /// every process name counts as busy: an unknown state never unlocks.
+    failed: Option<String>,
 }
 
 impl InUse {
@@ -45,7 +52,10 @@ impl InUse {
             }
         }
         procs.sort_by_key(|p| p.pid);
-        InUse { procs, home: None }
+        InUse {
+            procs,
+            ..InUse::default()
+        }
     }
 
     /// Drop processes that must never lock anything (devsweep itself and the
@@ -60,20 +70,48 @@ impl InUse {
         self
     }
 
-    /// Snapshot of every process cwd. Any failure yields an empty map.
+    /// A snapshot that could not be taken; it locks everything.
+    pub fn failed(reason: impl Into<String>) -> InUse {
+        InUse {
+            failed: Some(reason.into()),
+            ..InUse::default()
+        }
+    }
+
+    /// Parse the result of running lsof. An error or an output without any
+    /// process fails closed.
+    pub fn from_output(output: anyhow::Result<String>) -> InUse {
+        match output {
+            Ok(out) => {
+                let parsed = InUse::parse(&out);
+                if parsed.is_empty() {
+                    InUse::failed("lsof listed no process")
+                } else {
+                    parsed
+                }
+            }
+            Err(err) => InUse::failed(err.to_string()),
+        }
+    }
+
+    /// Snapshot of every process cwd.
     pub fn collect() -> InUse {
-        let output = Command::new("lsof")
-            .args(["+c0", "-a", "-d", "cwd", "-Fpcn"])
-            .output();
-        let parsed = match output {
-            Ok(out) => InUse::parse(&String::from_utf8_lossy(&out.stdout)),
-            Err(_) => InUse::default(),
-        };
-        let parsed = parsed.excluding(&own_process_chain());
+        let output = crate::scan::run_timeout(
+            &["lsof", "+c0", "-a", "-d", "cwd", "-Fpcn"],
+            None,
+            LSOF_TIMEOUT,
+        );
+        let parsed = InUse::from_output(output).excluding(&own_process_chain());
         match std::env::var_os("HOME") {
             Some(home) => parsed.with_home(home),
             None => parsed,
         }
+    }
+
+    fn failure(&self) -> Option<String> {
+        self.failed
+            .as_ref()
+            .map(|reason| format!("process check failed: {reason}"))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -82,6 +120,9 @@ impl InUse {
 
     /// Lock reason when some process works at or below `path`.
     pub fn lock_for(&self, path: &Path) -> Option<String> {
+        if let Some(reason) = self.failure() {
+            return Some(reason);
+        }
         self.procs
             .iter()
             .filter(|p| p.cwd != Path::new("/") && Some(&p.cwd) != self.home.as_ref())
@@ -91,6 +132,9 @@ impl InUse {
 
     /// Lock reason when a process with one of these exact names is running.
     pub fn busy(&self, names: &[&str]) -> Option<String> {
+        if let Some(reason) = self.failure() {
+            return Some(reason);
+        }
         self.procs
             .iter()
             .find(|p| names.contains(&p.name.as_str()))
@@ -175,6 +219,22 @@ mod tests {
     fn excluded_pids_lock_nothing() {
         let iu = InUse::parse("p10\nczsh\nn/Users/u/app\n").excluding(&[10]);
         assert_eq!(iu.lock_for(Path::new("/Users/u/app")), None);
+    }
+
+    #[test]
+    fn failed_process_check_locks_every_path_and_name() {
+        let iu = InUse::failed("lsof timed out");
+        assert_eq!(
+            iu.lock_for(Path::new("/Users/u/app")).as_deref(),
+            Some("process check failed: lsof timed out")
+        );
+        assert!(iu.busy(&["pnpm"]).is_some());
+    }
+
+    #[test]
+    fn empty_lsof_output_counts_as_a_failed_check() {
+        let iu = InUse::from_output(Ok(String::new()));
+        assert!(iu.lock_for(Path::new("/Users/u/app")).is_some());
     }
 
     #[test]

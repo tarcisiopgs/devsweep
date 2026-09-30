@@ -209,7 +209,10 @@ impl Scanner for Catalog {
                 size: Some(bytes),
                 status: vec![Status::Detail(rule.group.clone())],
                 lock: ctx.inuse.busy(&names),
-                safe: rule.safe,
+                // `safe` describes the rule's command; its fallback wipes the
+                // folder, which may be a download cache.
+                safe: rule.safe
+                    && (rule.command.is_none() || matches!(removal, Removal::Command { .. })),
                 removal,
                 age_days: None,
                 recheck: crate::model::Recheck {
@@ -373,6 +376,18 @@ mod tests {
             items[0].removal,
             Removal::ClearDir(d.path().join("Library/Caches/Yarn"))
         );
+    }
+
+    #[test]
+    fn safe_rule_is_not_safe_when_falling_back_from_its_command() {
+        // `npm cache verify` is harmless; wiping the npm cache is not.
+        let d = tempfile::tempdir().unwrap();
+        fill(&d.path().join(".npm/_cacache"));
+        let rule = by_id("npm-cacache");
+        assert!(rule.safe && rule.command.is_some());
+        let items = scan(d.path(), vec![rule], &[], InUse::default());
+        assert!(matches!(items[0].removal, Removal::ClearDir(_)));
+        assert!(!items[0].safe);
     }
 
     #[test]

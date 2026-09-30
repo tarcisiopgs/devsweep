@@ -13,6 +13,7 @@ use crate::model::{Item, ItemId, Removal, SourceId, Status};
 pub trait Executor: Send + Sync {
     fn remove_dir(&self, p: &Path) -> Result<(), String>;
     fn clear_dir(&self, p: &Path) -> Result<(), String>;
+    fn remove_file(&self, p: &Path) -> Result<(), String>;
     fn command(&self, argv: &[String], cwd: Option<&Path>) -> Result<(), String>;
 }
 
@@ -38,6 +39,10 @@ impl Executor for RealExecutor {
             result.map_err(|e| format!("{}: {e}", path.display()))?;
         }
         Ok(())
+    }
+
+    fn remove_file(&self, p: &Path) -> Result<(), String> {
+        std::fs::remove_file(p).map_err(|e| e.to_string())
     }
 
     fn command(&self, argv: &[String], cwd: Option<&Path>) -> Result<(), String> {
@@ -124,6 +129,19 @@ fn is_worktree_remove(removal: &Removal) -> Option<&Path> {
     }
 }
 
+/// Every path passes the guard before any of them is touched.
+fn remove_paths(paths: &[PathBuf], exec: &dyn Executor, guard: &Guard) -> Result<(), String> {
+    paths.iter().try_for_each(|p| guard.check(p))?;
+    paths.iter().try_for_each(|p| {
+        // symlink_metadata: a symlink is removed as a file, never followed.
+        if std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()) {
+            exec.remove_dir(p)
+        } else {
+            exec.remove_file(p)
+        }
+    })
+}
+
 /// Remove every item in order. A failure never stops the batch.
 pub fn run_removals(
     items: Vec<Item>,
@@ -138,6 +156,7 @@ pub fn run_removals(
         let result = recheck(item).and_then(|()| match &item.removal {
             Removal::RemoveDir(p) => guard.check(p).and_then(|()| exec.remove_dir(p)),
             Removal::ClearDir(p) => guard.check(p).and_then(|()| exec.clear_dir(p)),
+            Removal::RemovePaths(paths) => remove_paths(paths, exec, guard),
             Removal::Command { argv, cwd } => exec.command(argv, cwd.as_deref()),
         });
         match result {
@@ -161,6 +180,9 @@ pub fn run_removals(
     let _ = tx.send(RemoveEvent::Finished);
 }
 
+/// Longest the recheck waits on git before refusing the item.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Re-check an item right before removing it: its folder still exists, no
 /// process moved into it, and a clean worktree is still clean.
 pub fn default_recheck(inuse: &InUse) -> impl Fn(&Item) -> Result<(), String> + '_ {
@@ -179,14 +201,26 @@ pub fn default_recheck(inuse: &InUse) -> impl Fn(&Item) -> Result<(), String> + 
         }
         let is_worktree = matches!(item.source, SourceId::Worktrees | SourceId::AgentWorktrees);
         if is_worktree && item.status.contains(&Status::Clean) {
-            let dirty = Command::new("git")
-                .arg("-C")
-                .arg(path)
-                .args(["status", "--porcelain"])
-                .output()
-                .map(|o| !o.status.success() || !o.stdout.is_empty())
-                .unwrap_or(true);
-            if dirty {
+            let dirty = crate::scan::run_timeout(
+                &[
+                    "git",
+                    "-C",
+                    &path.to_string_lossy(),
+                    "status",
+                    "--porcelain",
+                ],
+                None,
+                GIT_TIMEOUT,
+            )
+            .map(|out| !out.trim().is_empty())
+            .unwrap_or(true);
+            // New ignored files (`.env`) would go with the worktree unseen.
+            let shown = item.status.iter().find_map(|s| match s {
+                Status::Ignored(n) => Some(*n),
+                _ => None,
+            });
+            let ignored = crate::scan::worktrees::precious_ignored(path);
+            if dirty || ignored.is_none_or(|n| n > shown.unwrap_or(0)) {
                 return changed();
             }
         }
@@ -214,6 +248,9 @@ mod tests {
         }
         fn clear_dir(&self, p: &Path) -> Result<(), String> {
             self.record(format!("clear {}", p.display()))
+        }
+        fn remove_file(&self, p: &Path) -> Result<(), String> {
+            self.record(format!("rm {}", p.display()))
         }
         fn command(&self, argv: &[String], cwd: Option<&Path>) -> Result<(), String> {
             let cwd = cwd
@@ -297,11 +334,106 @@ mod tests {
     }
 
     #[test]
+    fn remove_paths_guards_and_removes_each_path() {
+        let (_d, h) = home();
+        fs::create_dir_all(h.join("avd/P.avd")).unwrap();
+        fs::write(h.join("avd/P.ini"), "path=").unwrap();
+        let exec = Fake::default();
+        let it = item(
+            1,
+            SourceId::Android,
+            Some(h.join("avd/P.avd")),
+            Removal::RemovePaths(vec![h.join("avd/P.avd"), h.join("avd/P.ini")]),
+            5,
+        );
+        let events = run(vec![it], &exec, &guard(&h), &ok);
+        assert!(events.iter().any(|e| matches!(e, RemoveEvent::Ok(1, 5))));
+        assert_eq!(
+            *exec.calls.lock().unwrap(),
+            vec![
+                format!("rmdir {}", h.join("avd/P.avd").display()),
+                format!("rm {}", h.join("avd/P.ini").display()),
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_paths_touches_nothing_when_one_path_is_refused() {
+        let (_d, h) = home();
+        fs::create_dir_all(h.join("avd/P.avd")).unwrap();
+        let exec = Fake::default();
+        let it = item(
+            1,
+            SourceId::Android,
+            Some(h.join("avd/P.avd")),
+            Removal::RemovePaths(vec![h.join("avd/P.avd"), PathBuf::from("/etc")]),
+            5,
+        );
+        let events = run(vec![it], &exec, &guard(&h), &ok);
+        assert!(events.iter().any(|e| matches!(e, RemoveEvent::Err(1, _))));
+        assert!(exec.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn guard_with_root_target_still_rejects_system_paths() {
         let (_d, h) = home();
         let g = Guard::new(h.clone(), PathBuf::from("/"), vec![], vec![]);
         assert!(g.check(Path::new("/etc")).is_err());
         assert!(g.check(Path::new("/usr/bin")).is_err());
+    }
+
+    #[test]
+    fn recheck_refuses_clean_worktree_that_gained_ignored_files() {
+        let (_d, h) = home();
+        let git = |dir: &Path, args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        let r = h.join("r");
+        fs::create_dir_all(&r).unwrap();
+        git(&r, &["init", "-q", "-b", "main"]);
+        fs::write(r.join(".gitignore"), ".env\n").unwrap();
+        git(&r, &["add", "."]);
+        git(
+            &r,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "i",
+            ],
+        );
+        let wt = h.join("wt");
+        git(
+            &r,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        let mut it = item(
+            1,
+            SourceId::Worktrees,
+            Some(wt.clone()),
+            Removal::RemoveDir(wt.clone()),
+            1,
+        );
+        it.status = vec![Status::Clean];
+        let inuse = crate::inuse::InUse::default();
+        assert_eq!(default_recheck(&inuse)(&it), Ok(()));
+        fs::write(wt.join(".env"), "SECRET=1").unwrap();
+        assert_eq!(
+            default_recheck(&inuse)(&it),
+            Err("changed since scan".into())
+        );
     }
 
     #[test]

@@ -156,7 +156,7 @@ fn describe(
             path: Some(wt.to_path_buf()),
             size: None,
             status: vec![Status::Detail("status unknown".into())],
-            lock,
+            lock: lock.or_else(|| Some("git did not answer".into())),
             safe: false,
             removal,
             age_days: None,
@@ -167,6 +167,8 @@ fn describe(
     let branch = git(wt, &["symbolic-ref", "-q", "--short", "HEAD"]);
     let merged = is_merged(main, &head, branch.as_deref());
     let dirty = status_out.lines().filter(|l| !l.trim().is_empty()).count() as u32;
+    // Unknown counts as something to lose: the worktree is then never safe.
+    let ignored = precious_ignored(wt);
     let age = git(wt, &["log", "-1", "--format=%ct"])
         .and_then(|t| t.parse::<u64>().ok())
         .map(|t| {
@@ -182,6 +184,11 @@ fn describe(
     } else {
         Status::Clean
     });
+    match ignored {
+        Some(0) => {}
+        Some(n) => status.push(Status::Ignored(n)),
+        None => status.push(Status::Detail("ignored files unknown".into())),
+    }
     if let Some(days) = age.filter(|d| *d >= STALE_DAYS) {
         status.push(Status::Stale(days));
     }
@@ -192,12 +199,24 @@ fn describe(
         path: Some(wt.to_path_buf()),
         size: None,
         status,
-        safe: merged && dirty == 0 && lock.is_none(),
+        safe: merged && dirty == 0 && ignored == Some(0) && lock.is_none(),
         lock,
         removal,
         age_days: age,
         recheck: crate::model::Recheck::default(),
     }
+}
+
+/// Git-ignored entries of a worktree that are not build artifacts, which
+/// `git worktree remove` would delete along with it. `None` when git fails.
+pub fn precious_ignored(wt: &Path) -> Option<u32> {
+    let out = git(wt, &["status", "--porcelain", "--ignored"])?;
+    let count = out
+        .lines()
+        .filter_map(|l| l.strip_prefix("!! "))
+        .filter(|rel| classify(&wt.join(rel.trim_end_matches('/'))).is_none())
+        .count();
+    Some(count as u32)
 }
 
 fn emit(tx: &Sender<ScanEvent>, item: Item) {
@@ -410,8 +429,12 @@ fn main_repo(wt: &Path) -> MainRepo {
     } else {
         wt.join(gitdir)
     };
-    if !gitdir.exists() {
-        return MainRepo::Gone;
+    // Only a gitdir that is certainly missing means gone. A permission error
+    // or an unmounted volume says nothing about the repository.
+    match std::fs::exists(&gitdir) {
+        Ok(true) => {}
+        Ok(false) if volume_mounted(&gitdir) => return MainRepo::Gone,
+        _ => return MainRepo::Unknown,
     }
     let Some(common) = git(
         wt,
@@ -428,6 +451,19 @@ fn main_repo(wt: &Path) -> MainRepo {
     } else {
         // Bare repository: git commands run inside it directly.
         MainRepo::Found(common)
+    }
+}
+
+/// False when `path` lives on a volume under `/Volumes` that is not mounted.
+fn volume_mounted(path: &Path) -> bool {
+    let mut parts = path.components();
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(std::path::Component::RootDir), Some(v), Some(name))
+            if v.as_os_str() == "Volumes" =>
+        {
+            Path::new("/Volumes").join(name).is_dir()
+        }
+        _ => true,
     }
 }
 
@@ -592,6 +628,37 @@ mod tests {
     }
 
     #[test]
+    fn ignored_files_that_are_not_artifacts_block_safe() {
+        // `git worktree remove` deletes ignored files like `.env` without --force.
+        let (_d, root, wt) = setup(true);
+        fs::write(wt.join(".gitignore"), ".env\nnode_modules/\n").unwrap();
+        git(&wt, &["add", ".gitignore"]);
+        git(&wt, &["commit", "-q", "-m", "ignore"]);
+        git(&root.join("r"), &["merge", "-q", "--ff-only", "feat"]);
+        fs::write(wt.join(".env"), "SECRET=1").unwrap();
+        let items = run_folder(&ctx(&root, &root, InUse::default()));
+        assert!(items[0].status.contains(&Status::Clean));
+        assert!(!items[0].safe);
+        assert!(
+            items[0].status.contains(&Status::Ignored(1)),
+            "{:?}",
+            items[0].status
+        );
+    }
+
+    #[test]
+    fn ignored_artifacts_alone_keep_a_merged_worktree_safe() {
+        let (_d, root, wt) = setup(true);
+        fs::write(wt.join(".gitignore"), "node_modules/\n").unwrap();
+        git(&wt, &["add", ".gitignore"]);
+        git(&wt, &["commit", "-q", "-m", "ignore"]);
+        git(&root.join("r"), &["merge", "-q", "--ff-only", "feat"]);
+        fs::create_dir_all(wt.join("node_modules/x")).unwrap();
+        let items = run_folder(&ctx(&root, &root, InUse::default()));
+        assert!(items[0].safe, "{:?}", items[0].status);
+    }
+
+    #[test]
     fn unmerged_worktree_is_not_safe() {
         let (_d, root, _wt) = setup(false);
         let items = run_folder(&ctx(&root, &root, InUse::default()));
@@ -731,6 +798,7 @@ mod tests {
         );
         assert!(!items[0].status.contains(&Status::Broken));
         assert!(!items[0].safe);
+        assert!(items[0].lock.is_some(), "status unknown must be locked");
         assert!(
             matches!(&items[0].removal, Removal::Command { argv, .. } if argv[1] == "worktree")
         );
@@ -884,6 +952,46 @@ mod tests {
             .unwrap();
         assert_eq!(local.source, SourceId::Worktrees);
         assert_eq!(local.label, "wt");
+    }
+
+    #[test]
+    fn unreadable_gitdir_is_unknown_not_broken() {
+        // A main repo in a folder we cannot read (privacy prompt, unmounted
+        // volume) must never turn its worktree into a deletable folder.
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let private = home.join("private");
+        let r = private.join("r");
+        repo(&r);
+        let agent_root = home.join(".codex/worktrees");
+        fs::create_dir_all(&agent_root).unwrap();
+        let wt = agent_root.join("w1");
+        git(
+            &r,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                wt.to_str().unwrap(),
+                "main",
+            ],
+        );
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o000)).unwrap();
+        let items = run_agent(
+            &ctx(&home.join("elsewhere"), &home, InUse::default()),
+            vec![agent_root],
+        );
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(
+            !items[0].status.contains(&Status::Broken),
+            "{:?}",
+            items[0].status
+        );
+        assert!(!matches!(items[0].removal, Removal::RemoveDir(_)));
+        assert!(items[0].lock.is_some());
     }
 
     #[test]

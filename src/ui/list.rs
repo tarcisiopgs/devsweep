@@ -179,6 +179,10 @@ pub fn status_spans(item: &Item) -> Vec<Span<'static>> {
                 format!("dirty · {n} files"),
                 Style::default().fg(Color::Red),
             ),
+            Status::Ignored(n) => (
+                format!("{n} ignored {}", if *n == 1 { "file" } else { "files" }),
+                Style::default().fg(Color::Red),
+            ),
             Status::Stale(d) => (format!("stale {d}d"), Style::default().fg(Color::Cyan)),
             Status::Broken => ("broken".into(), Style::default().fg(Color::Red)),
             Status::Booted => ("booted".into(), Style::default().fg(Color::Cyan)),

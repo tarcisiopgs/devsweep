@@ -41,10 +41,10 @@ create, and lets you act item by item:
 | Source | Section | Preselected when |
 |---|---|---|
 | Project artifacts: `node_modules`, `.venv`, `Pods`, `.next`, `.expo`, `.gradle`, `.cxx`, `target`, `vendor`, `__pycache__`…; `dist`/`build`/`out` only when git ignores them | This folder | never |
-| Git worktrees of the repositories in the folder, outside the agent folders below | This folder | merged, clean and unlocked |
-| Agent worktrees in `~/.codex/worktrees`, `~/orca/workspaces`, `~/.claude-squad/worktrees` | Machine | merged, clean and unlocked |
+| Git worktrees of the repositories in the folder, outside the agent folders below | This folder | merged, clean, no ignored files beyond build artifacts, and unlocked |
+| Agent worktrees in `~/.codex/worktrees`, `~/orca/workspaces`, `~/.claude-squad/worktrees` | Machine | merged, clean, no ignored files beyond build artifacts, and unlocked |
 | iOS simulators and runtimes | Machine | the simulator is unavailable |
-| Android AVDs and system images | Machine | the system image is not used by any AVD |
+| Android AVDs and system images | Machine | never |
 | Docker dangling images, build cache, unused images, stopped containers, orphan volumes | Machine | dangling images and build cache |
 | Dev tool caches (npm, pnpm, bun, Yarn, pip, uv, Go, Cargo, Gradle, RubyGems, Expo, CocoaPods, Xcode, Clang, Playwright, Claude, Codex…) | Machine | the cache regenerates and costs nothing to rebuild |
 | Xcode device support files and archives | Machine | never |
