@@ -9,6 +9,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 
 use devsweep::app::{Action, App};
+use devsweep::fsutil::disk_free;
 use devsweep::inuse::InUse;
 use devsweep::model::Item;
 use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_removals};
@@ -115,6 +116,9 @@ fn run_app(
         if let Some(rx) = &remove_rx {
             for ev in rx.try_iter() {
                 let finished = matches!(ev, RemoveEvent::Finished);
+                if finished {
+                    app.disk_free.1 = disk_free(&home);
+                }
                 let action = app.on_remove(ev);
                 if finished && notify {
                     devsweep::notify::post("devsweep", &app.completion_summary());
@@ -142,7 +146,10 @@ fn run_app(
         match app.on_key(key) {
             Action::None => {}
             Action::Quit => return Ok(()),
-            Action::StartRemoval(items) => remove_rx = Some(start_removal(items, &target, &home)),
+            Action::StartRemoval(items) => {
+                app.disk_free.0 = disk_free(&home);
+                remove_rx = Some(start_removal(items, &target, &home));
+            }
             Action::Rescan => {
                 remove_rx = None;
                 scan_rx = start_scan(&target, &home, Some(&mut app)).1;

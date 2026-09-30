@@ -1,18 +1,17 @@
 ---
 source: src/ui/review.rs
-assertion_line: 227
 expression: render(&done(true)).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
-"│ Freed 1.7 GB in 2 items                                                                          │"
+"│ ✓ Freed 1.7 GB                                                       disk free 41.0 GB → 43.1 GB │"
 "│                                                                                                  │"
-"│ 1 failed                                                                                         │"
+"│   Worktrees  █▍                          95 MB   1 item                                          │"
+"│   Docker     ████████████████████████   1.6 GB   1 item                                          │"
+"│                                                                                                  │"
+"│ ✗ 1 not removed                                                                                  │"
 "│   ✗ codex/glowz-robots                                                        changed since scan │"
-"│                                                                                                  │"
-"│                                                                                                  │"
-"│                                                                                                  │"
-"│                                                                                                  │"
-"│                                                                                                  │"
+"│   Left alone on purpose: they changed after the scan.                                            │"
+"│   Press r to scan again and review them.                                                         │"
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"

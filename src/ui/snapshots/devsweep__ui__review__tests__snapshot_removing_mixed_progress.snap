@@ -1,16 +1,15 @@
 ---
 source: src/ui/review.rs
-assertion_line: 208
 expression: render(&a).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
-"│ ⠋ Removing · 1.6 GB freed so far                                                                 │"
+"│ ⠋ Removing · 2 of 3 · 1.6 GB freed so far                                                        │"
 "│                                                                                                  │"
 "│ Worktrees                                                                                        │"
 "│   ✗ codex/glowz-robots                                                        changed since scan │"
 "│   ⠋ codex/old app                                                                       removing │"
 "│ Docker                                                                                           │"
-"│   ✓ Dangling images                                                                         1.6G │"
+"│   ✓ Dangling images                                                                       1.6 GB │"
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"
