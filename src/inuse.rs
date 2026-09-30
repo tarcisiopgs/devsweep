@@ -48,6 +48,13 @@ impl InUse {
         InUse { procs, home: None }
     }
 
+    /// Drop processes that must never lock anything (devsweep itself and the
+    /// shell that launched it, which usually sits in the scanned folder).
+    pub fn excluding(mut self, pids: &[u32]) -> InUse {
+        self.procs.retain(|p| !pids.contains(&p.pid));
+        self
+    }
+
     pub fn with_home(mut self, home: impl Into<PathBuf>) -> InUse {
         self.home = Some(home.into());
         self
@@ -62,6 +69,7 @@ impl InUse {
             Ok(out) => InUse::parse(&String::from_utf8_lossy(&out.stdout)),
             Err(_) => InUse::default(),
         };
+        let parsed = parsed.excluding(&own_process_chain());
         match std::env::var_os("HOME") {
             Some(home) => parsed.with_home(home),
             None => parsed,
@@ -88,6 +96,30 @@ impl InUse {
             .find(|p| names.contains(&p.name.as_str()))
             .map(|p| format!("{} · PID {}", p.name, p.pid))
     }
+}
+
+/// This process and its ancestors (npx, node, the shell…), up to launchd.
+pub fn own_process_chain() -> Vec<u32> {
+    let mut chain = vec![std::process::id()];
+    while let Some(&pid) = chain.last() {
+        let parent = Command::new("ps")
+            .args(["-o", "ppid=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+            });
+        match parent {
+            Some(ppid) if ppid > 1 && !chain.contains(&ppid) && chain.len() < 32 => {
+                chain.push(ppid)
+            }
+            _ => break,
+        }
+    }
+    chain
 }
 
 #[cfg(test)]
@@ -137,6 +169,19 @@ mod tests {
         let iu = InUse::parse("p77\ncpnpm\nn/Users/u/app\n");
         assert_eq!(iu.busy(&["pnpm"]).as_deref(), Some("pnpm · PID 77"));
         assert_eq!(iu.busy(&["pn"]), None);
+    }
+
+    #[test]
+    fn excluded_pids_lock_nothing() {
+        let iu = InUse::parse("p10\nczsh\nn/Users/u/app\n").excluding(&[10]);
+        assert_eq!(iu.lock_for(Path::new("/Users/u/app")), None);
+    }
+
+    #[test]
+    fn own_ancestors_include_parent() {
+        let pids = own_process_chain();
+        assert_eq!(pids[0], std::process::id());
+        assert!(pids.len() >= 2);
     }
 
     #[test]
