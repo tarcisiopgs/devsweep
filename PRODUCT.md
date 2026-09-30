@@ -16,11 +16,11 @@ Developers on macOS who juggle many projects, package managers, mobile toolchain
 
 ## Product Purpose
 
-devsweep finds everything a developer's machine accumulates that can go — project build artifacts (`node_modules`, `.venv`, `Pods`…), git worktrees, iOS simulators and runtimes, Android AVDs and system images, Docker leftovers, dev tool caches, Xcode data and Homebrew — and lets the user pick what to delete in one terminal UI. Success is replacing npkill and mac-cleaner-cli with a single `npx devsweep`, covering at least the developer-tool categories Mole cleans, and acting on what Mole only reports, without ever deleting something still in use.
+devsweep finds everything a developer's machine accumulates that can go — project build artifacts (`node_modules`, `.venv`, `Pods`…), git worktrees, iOS simulators and runtimes, Android AVDs and system images, Docker leftovers, dev tool caches, Xcode data, Homebrew and the Trash — and lets the user pick what to delete in one terminal UI. Success is replacing npkill and mac-cleaner-cli with a single `npx devsweep`, covering at least the developer-tool categories Mole cleans, and acting on what Mole only reports, without ever deleting something still in use.
 
 ## Positioning
 
-It is built for developers, not for generic Mac cleaning. The closest tool is Mole (GPL-3.0), which cleans dev caches in batch and only reports simulators, Docker volumes, agent worktrees and AVDs. devsweep is lifecycle-aware: it understands git worktrees created by coding agents (Codex, Orca, claude-squad, Claude Code) and blocks the ones with a live process, and it removes simulators, emulators, Docker data and worktrees through their native commands instead of deleting files behind the tools' backs.
+It is built for developers. Besides the developer toolchain, it covers the Trash, which developers empty as often as anyone, but not generic Mac cleaning such as browser caches, app leftovers or system logs. The closest tool is Mole (GPL-3.0), which cleans dev caches in batch and only reports simulators, Docker volumes, agent worktrees and AVDs. devsweep is lifecycle-aware: it understands git worktrees created by coding agents (Codex, Orca, claude-squad, Claude Code) and blocks the ones with a live process, and it removes simulators, emulators, Docker data and worktrees through their native commands instead of deleting files behind the tools' backs.
 
 ## Operating Context
 
@@ -31,7 +31,7 @@ Run from a terminal inside a projects folder (e.g. `~/Workspace`). The UI shows 
 - Nothing is deleted without a review screen showing the total and the exact commands.
 - Only safe items (regenerable, no data loss, cheap to recreate) are preselected.
 - Items with a live process inside them, booted simulators and running emulators are shown locked and cannot be selected.
-- Docker volumes and Xcode Archives are never preselected.
+- Docker volumes, Xcode Archives and the Trash are never preselected.
 - Clean-room with respect to Mole: devsweep is MIT and never reads or ports Mole's GPL source; its cache catalog is built from documented facts and observed paths, each rule recording its source.
 - Dev cache rules are declarative data (TOML), so contributors can add a rule without touching the engine.
 - macOS only in v1; no mouse, no config file, no non-interactive mode.
