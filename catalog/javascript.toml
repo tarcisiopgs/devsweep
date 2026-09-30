@@ -57,8 +57,7 @@ label = "bun cache"
 paths = ["~/.bun/install/cache"]
 safe = false
 mode = "clear"
-command = ["bun", "pm", "cache", "rm"]
-requires_bin = "bun"
+# No command: `bun pm cache rm` refuses to run outside a folder with a package.json.
 busy_when = ["bun"]
 source = "docs: https://bun.sh/docs/install/cache"
 

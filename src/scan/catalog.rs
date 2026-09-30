@@ -367,16 +367,30 @@ mod tests {
     #[test]
     fn command_falls_back_to_mode_when_bin_missing() {
         let d = tempfile::tempdir().unwrap();
-        fill(&d.path().join(".bun/install/cache"));
-        let items = scan(d.path(), vec![by_id("bun-cache")], &[], InUse::default());
+        fill(&d.path().join("Library/Caches/Yarn"));
+        let items = scan(d.path(), vec![by_id("yarn-cache")], &[], InUse::default());
         assert_eq!(
             items[0].removal,
-            Removal::ClearDir(d.path().join(".bun/install/cache"))
+            Removal::ClearDir(d.path().join("Library/Caches/Yarn"))
         );
     }
 
     #[test]
     fn command_used_when_bin_present() {
+        let d = tempfile::tempdir().unwrap();
+        fill(&d.path().join("Library/Caches/Yarn"));
+        let items = scan(
+            d.path(),
+            vec![by_id("yarn-cache")],
+            &["yarn"],
+            InUse::default(),
+        );
+        assert!(matches!(&items[0].removal, Removal::Command { argv, .. } if argv[0] == "yarn"));
+    }
+
+    #[test]
+    fn bun_cache_is_cleared_directly_even_with_bun_installed() {
+        // `bun pm cache rm` fails outside a folder with a package.json.
         let d = tempfile::tempdir().unwrap();
         fill(&d.path().join(".bun/install/cache"));
         let items = scan(
@@ -385,7 +399,10 @@ mod tests {
             &["bun"],
             InUse::default(),
         );
-        assert!(matches!(&items[0].removal, Removal::Command { argv, .. } if argv[0] == "bun"));
+        assert_eq!(
+            items[0].removal,
+            Removal::ClearDir(d.path().join(".bun/install/cache"))
+        );
     }
 
     #[test]
