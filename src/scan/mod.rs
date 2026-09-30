@@ -1,5 +1,6 @@
 //! Scanner contract and parallel orchestration.
 
+pub mod android;
 pub mod artifacts;
 pub mod ios;
 pub mod worktrees;
