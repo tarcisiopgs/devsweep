@@ -1,5 +1,6 @@
 ---
 source: src/ui/list.rs
+assertion_line: 686
 expression: "render(&mockup(), 70, 16).backend()"
 ---
 "┌ devsweep ─ /Users/u/Workspace ─────────────────────────────────────┐"
@@ -7,11 +8,11 @@ expression: "render(&mockup(), 70, 16).backend()"
 "│────────────────────────────────────────────────────────────────────│"
 "│ Worktrees  1.5 GB · 5 items                             sort: size │"
 "│ ────────────────────────────────────────────────────────────────── │"
-"│ [x] codex/glowz-robots      merged · clean · safe  ██████   412 MB │"
-"│ [x] codex/customer-module   merged · clean · safe  █████▋   388 MB │"
-"│ [ ] codex/glowz-dev-deploy  dirty · 3 files        ████▍    301 MB │"
-"│  ⊘  orca/website/arowana    claude · PID 4821      ████▏    290 MB │"
-"│ [ ] codex/090b              clean · stale 41d      █▍        95 MB │"
+"│ [x] codex/glowz-robots             merged · clean · safe    412 MB │"
+"│ [x] codex/customer-module          merged · clean · safe    388 MB │"
+"│ [ ] codex/glowz-dev-deploy         dirty · 3 files          301 MB │"
+"│  ⊘  orca/website/arowana           claude · PID 4821        290 MB │"
+"│ [ ] codex/090b                     clean · stale 41d         95 MB │"
 "│                                                                    │"
 "│                                                                    │"
 "│                                                                    │"
