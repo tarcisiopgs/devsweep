@@ -32,7 +32,7 @@ create, and lets you act item by item:
   they may hold a database.
 - Everything is removed with the tool's own command when one exists
   (`git worktree remove`, `xcrun simctl delete`, `avdmanager delete avd`,
-  `docker … prune`, `pnpm store prune`, `brew cleanup`).
+  `docker … prune`, `pnpm store prune`, `brew cleanup`, Finder's empty trash).
 - Nothing is deleted before a review screen that shows the total and the
   exact commands. Each item is checked again right before removal.
 
@@ -49,6 +49,7 @@ create, and lets you act item by item:
 | Dev tool caches (npm, pnpm, bun, Yarn, pip, uv, Go, Cargo, Gradle, RubyGems, Expo, CocoaPods, Xcode, Clang, Playwright, Claude, Codex…) | Machine | the cache regenerates and costs nothing to rebuild |
 | Xcode device support files and archives | Machine | never |
 | Homebrew cleanup | Machine | always |
+| The Trash, including mounted volumes' (emptied by Finder) | Machine | never |
 
 **Safe** means: it regenerates by itself, nothing is lost, and recreating it
 costs nothing relevant. Download caches regenerate too, but the next build

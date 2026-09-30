@@ -19,10 +19,11 @@ pub enum SourceId {
     DevCaches,
     Xcode,
     Homebrew,
+    Trash,
 }
 
 impl SourceId {
-    pub const ALL: [SourceId; 9] = [
+    pub const ALL: [SourceId; 10] = [
         SourceId::Artifacts,
         SourceId::Worktrees,
         SourceId::AgentWorktrees,
@@ -32,6 +33,7 @@ impl SourceId {
         SourceId::DevCaches,
         SourceId::Xcode,
         SourceId::Homebrew,
+        SourceId::Trash,
     ];
 
     pub fn section(self) -> Section {
@@ -52,6 +54,7 @@ impl SourceId {
             SourceId::DevCaches => "Dev caches",
             SourceId::Xcode => "Xcode",
             SourceId::Homebrew => "Homebrew",
+            SourceId::Trash => "Trash",
         }
     }
 }
