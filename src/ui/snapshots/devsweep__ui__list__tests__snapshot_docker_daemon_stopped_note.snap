@@ -1,16 +1,17 @@
 ---
 source: src/ui/list.rs
+assertion_line: 653
 expression: "render(&a, 100, 12).backend()"
 ---
 "┌ devsweep ─ /w ───────────────────────────────────────────────────────────────────────────────────┐"
-"│ ── machine ───────────────│ Docker                                                    sort: size │"
-"│▌ Docker               0 B │ ──────────────────────────────────────────────────────────────────── │"
-"│                           │ daemon stopped                                                       │"
-"│                           │ Start Docker Desktop, then press r to scan again.                    │"
-"│                           │                                                                      │"
-"│                           │                                                                      │"
-"│                           │                                                                      │"
-"│                           │                                                                      │"
+"│ ── machine ───────│ Docker                                                            sort: size │"
+"│▌ Docker       0 B │ ──────────────────────────────────────────────────────────────────────────── │"
+"│                   │ daemon stopped                                                               │"
+"│                   │ Start Docker Desktop, then press r to scan again.                            │"
+"│                   │                                                                              │"
+"│                   │                                                                              │"
+"│                   │                                                                              │"
+"│                   │                                                                              │"
 "│──────────────────────────────────────────────────────────────────────────────────────────────────│"
 "│ 0 selected · 0 B   space toggle · ⏎ review · ? help · a all · s sort · / filter · q quit         │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

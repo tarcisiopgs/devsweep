@@ -1,4 +1,4 @@
-//! Main screen: source chart, item list and status bar.
+//! Main screen: source list, item list and status bar.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,8 +9,6 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use crate::app::{App, Focus, SortBy, SourceState};
 use crate::model::{Item, Section, SourceId, Status, format_size_long};
 
-/// Width of the size bar in the source chart.
-const SIDE_BAR_W: usize = 8;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Width of a size column: "999.9 GB".
 pub const SIZE_W: usize = 8;
@@ -30,22 +28,6 @@ fn title() -> Style {
 
 pub fn spinner(app: &App) -> &'static str {
     SPINNER[(app.spinner_tick % SPINNER.len() as u64) as usize]
-}
-
-/// A bar of `width` cells for `value` out of `max`, in eighths of a cell.
-/// Anything above zero shows at least a sliver.
-pub fn bar(value: u64, max: u64, width: usize) -> String {
-    const EIGHTHS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
-    if max == 0 || value == 0 || width == 0 {
-        return " ".repeat(width);
-    }
-    let eighths = ((value as u128 * width as u128 * 8) / max as u128).max(1) as usize;
-    let eighths = eighths.min(width * 8);
-    let mut out = "█".repeat(eighths / 8);
-    out.push_str(EIGHTHS[eighths % 8]);
-    let used = eighths / 8 + usize::from(!eighths.is_multiple_of(8));
-    out.push_str(&" ".repeat(width - used));
-    out
 }
 
 /// What the user can do about a scan failure or note, if anything.
@@ -136,13 +118,12 @@ fn label_width(app: &App) -> usize {
         .unwrap_or(0)
 }
 
-/// Gutter, label, bar and size, plus the right border.
+/// Gutter, label and size, plus the right border.
 fn sidebar_width(app: &App) -> u16 {
-    (2 + label_width(app) + 1 + SIDE_BAR_W + 1 + SIZE_W + 1 + 1) as u16
+    (2 + label_width(app) + 2 + SIZE_W + 1 + 1) as u16
 }
 
-/// Sources as a chart: each row carries a bar of its size against the
-/// largest source, and the focused one gets a gutter mark.
+/// Sources with their size; the focused one gets a gutter mark.
 fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let focused = app.focus == Focus::Sidebar;
     let block = Block::default()
@@ -158,12 +139,6 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .max()
         .unwrap_or(0);
     let width = inner.width as usize;
-    let bar_w = width.saturating_sub(2 + label_w + 1 + 1 + SIZE_W + 1);
-    let max = sources
-        .iter()
-        .map(|s| app.source_total(*s))
-        .max()
-        .unwrap_or(0);
 
     let mut lines = Vec::new();
     let mut last_section = None;
@@ -190,13 +165,10 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
             _ if empty => (" ", dim()),
             _ => (" ", white()),
         };
-        let bar_style = if current && focused { yellow() } else { style };
         lines.push(Line::from(vec![
             Span::styled(gutter, style),
             Span::raw(" "),
-            Span::styled(format!("{:<label_w$} ", source.label()), style),
-            Span::styled(bar(app.source_total(source), max, bar_w), bar_style),
-            Span::raw(" "),
+            Span::styled(format!("{:<label_w$}  ", source.label()), style),
             source_total(app, source),
         ]));
     }
@@ -689,14 +661,6 @@ mod tests {
     #[test]
     fn snapshot_too_small() {
         insta::assert_snapshot!(render(&mockup(), 30, 8).backend());
-    }
-
-    #[test]
-    fn bar_scales_in_eighths_and_never_hides_a_nonzero_value() {
-        assert_eq!(super::bar(100, 100, 4), "████");
-        assert_eq!(super::bar(50, 100, 4), "██  ");
-        assert_eq!(super::bar(1, 1_000_000, 4), "▏   ");
-        assert_eq!(super::bar(0, 100, 4), "    ");
     }
 
     #[test]

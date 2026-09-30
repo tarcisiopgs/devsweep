@@ -6,7 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::list::{SIZE_W, bar, frame, spinner};
+use super::list::{SIZE_W, frame, spinner};
 use crate::app::{App, Progress, Screen};
 use crate::model::{Item, SourceId, format_size_long};
 
@@ -243,8 +243,6 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
         .map(|(s, _, _)| s.label().chars().count())
         .max()
         .unwrap_or(0);
-    let max = by_source.iter().map(|(_, _, b)| *b).max().unwrap_or(0);
-    let bar_w = (body.width as usize / 3).clamp(8, 24);
     let mut lines = Vec::new();
     for (source, n, bytes) in &by_source {
         let noun = if *n == 1 { "item" } else { "items" };
@@ -253,7 +251,6 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
                 format!("  {:<label_w$}  ", source.label()),
                 Style::default().fg(Color::White),
             ),
-            Span::styled(bar(*bytes, max, bar_w), green()),
             Span::styled(
                 format!(" {:>SIZE_W$}", format_size_long(*bytes)),
                 Style::default().fg(Color::White),

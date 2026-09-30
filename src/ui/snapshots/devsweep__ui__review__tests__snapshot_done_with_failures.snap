@@ -1,12 +1,13 @@
 ---
 source: src/ui/review.rs
+assertion_line: 426
 expression: render(&done(true)).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
 "│ ✓ Freed 1.7 GB                                                       disk free 41.0 GB → 43.1 GB │"
 "│                                                                                                  │"
-"│   Worktrees  █▍                          95 MB   1 item                                          │"
-"│   Docker     ████████████████████████   1.6 GB   1 item                                          │"
+"│   Worktrees      95 MB   1 item                                                                  │"
+"│   Docker        1.6 GB   1 item                                                                  │"
 "│                                                                                                  │"
 "│ ✗ 1 not removed                                                                                  │"
 "│   ✗ codex/glowz-robots                                                        changed since scan │"
