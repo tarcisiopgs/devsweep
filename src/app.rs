@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::model::{Item, ItemId, SourceId};
+use crate::model::{Item, ItemId, SourceId, format_size_long};
 use crate::remove::RemoveEvent;
 use crate::scan::ScanEvent;
 
@@ -442,6 +442,22 @@ impl App {
                 _ => (n, total),
             })
     }
+
+    /// One-line result of the removal, used by the native notification.
+    pub fn completion_summary(&self) -> String {
+        let (n, bytes) = self.freed_total();
+        let noun = if n == 1 { "item" } else { "items" };
+        let mut summary = format!("Freed {} in {n} {noun}", format_size_long(bytes));
+        let failed = self
+            .progress
+            .values()
+            .filter(|p| matches!(p, Progress::Err(_)))
+            .count();
+        if failed > 0 {
+            summary.push_str(&format!(" · {failed} failed"));
+        }
+        summary
+    }
 }
 
 #[cfg(test)]
@@ -774,6 +790,16 @@ mod tests {
         assert_eq!(a.screen, Screen::Done);
         assert_eq!(a.freed_total(), (1, 100));
         assert!(matches!(a.progress.get(&2), Some(Progress::Err(m)) if m == "boom"));
+    }
+
+    #[test]
+    fn completion_summary_counts_freed_and_failed() {
+        let mut a = removing();
+        a.on_remove(RemoveEvent::Ok(1, 1_900_000_000));
+        a.on_remove(RemoveEvent::Finished);
+        assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item");
+        a.on_remove(RemoveEvent::Err(2, "boom".into()));
+        assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item · 1 failed");
     }
 
     #[test]

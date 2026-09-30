@@ -68,6 +68,9 @@ downloads everything again, so they are listed and left for you to decide.
 | `y` | confirm on the review screen |
 | `q` | quit |
 
+When a removal finishes, devsweep posts a macOS notification with the result.
+Pass `--no-notify` to turn it off.
+
 ## How it compares
 
 - [npkill](https://github.com/voidcosmos/npkill) and
