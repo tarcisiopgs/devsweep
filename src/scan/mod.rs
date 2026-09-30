@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod docker;
 pub mod homebrew;
 pub mod ios;
+pub mod trash;
 pub mod worktrees;
 pub mod xcode;
 
@@ -94,6 +95,7 @@ pub fn all_scanners(home: &std::path::Path) -> Vec<Box<dyn Scanner>> {
         Box::new(docker::Docker),
         Box::new(xcode::Xcode),
         Box::new(homebrew::Homebrew),
+        Box::new(trash::Trash::for_home(home)),
     ];
     if let Ok(catalog) = catalog::Catalog::load() {
         scanners.push(Box::new(catalog));
