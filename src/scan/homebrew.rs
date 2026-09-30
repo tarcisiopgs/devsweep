@@ -48,6 +48,7 @@ impl Scanner for Homebrew {
                 recheck: crate::model::Recheck {
                     scope: None,
                     busy: vec!["brew".into()],
+                    ..Default::default()
                 },
             };
             let _ = tx.send(ScanEvent::Found(item));

@@ -128,6 +128,13 @@ pub struct Recheck {
     pub scope: Option<PathBuf>,
     /// Process names that lock the item while running.
     pub busy: Vec<String>,
+    /// Command-line fragments of a process that locks the item (a running
+    /// emulator: `-avd Pixel_8`).
+    pub args: Vec<String>,
+    /// A command whose output, when it contains the needle, means the item
+    /// is in use (`xcrun simctl list devices booted` and a device UDID).
+    /// A failing command counts as in use.
+    pub probe: Option<(Vec<String>, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

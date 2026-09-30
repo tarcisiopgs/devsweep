@@ -98,7 +98,7 @@ impl Android {
             let item = Item {
                 id: ctx.next_id(),
                 source: SourceId::Android,
-                label: name,
+                label: name.clone(),
                 path: Some(dir.clone()),
                 size: None,
                 status: age.map(Status::LastUsed).into_iter().collect(),
@@ -106,7 +106,11 @@ impl Android {
                 safe: false,
                 removal,
                 age_days: age,
-                recheck: crate::model::Recheck::default(),
+                recheck: crate::model::Recheck {
+                    // The emulator names its AVD with `-avd NAME` or `@NAME`.
+                    args: vec![format!("-avd {name}"), format!("@{name}")],
+                    ..Default::default()
+                },
             };
             emit(tx, item);
         }
@@ -321,6 +325,20 @@ mod tests {
         );
         let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
         assert_eq!(avd.lock.as_deref(), Some("emulator running"));
+    }
+
+    #[test]
+    fn avd_is_rechecked_for_an_emulator_started_after_the_scan() {
+        let (_d, a) = setup();
+        let items = scan(&a, "");
+        let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
+        assert_eq!(
+            avd.recheck.args,
+            vec![
+                "-avd Pixel_8_API_34".to_string(),
+                "@Pixel_8_API_34".to_string()
+            ]
+        );
     }
 
     #[test]

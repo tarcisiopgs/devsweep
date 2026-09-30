@@ -1,16 +1,16 @@
 ---
 source: src/ui/review.rs
-assertion_line: 400
+assertion_line: 409
 expression: render(&a).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
-"│ ⠋ Removing · 2 of 3 · 1.6 GB freed so far                                                        │"
+"│ ⠋ Removing · 0 of 3 · 0 B freed so far                                                           │"
 "│                                                                                                  │"
 "│ Worktrees                                                                                        │"
-"│   ✗ codex/glowz-robots                                                        changed since scan │"
-"│   ⠋ codex/old app                                                                       removing │"
+"│   · codex/glowz-robots                                                                   waiting │"
+"│   · codex/old app                                                                        waiting │"
 "│ Docker                                                                                           │"
-"│   ✓ Dangling images                                                                       1.6 GB │"
+"│   ⠋ Dangling images                                                                     removing │"
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"
@@ -21,5 +21,5 @@ expression: render(&a).backend()
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│──────────────────────────────────────────────────────────────────────────────────────────────────│"
-"│ q stop after the current item                                                                    │"
+"│ stopping after the current item · ctrl-c again to quit now                                       │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

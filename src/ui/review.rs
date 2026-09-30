@@ -198,7 +198,15 @@ pub fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     f.render_widget(Paragraph::new(scroll(lines, focus, body.height)), body);
-    footer(f, foot, "q quit when finished");
+    footer(
+        f,
+        foot,
+        if app.stopping() {
+            "stopping after the current item · ctrl-c again to quit now"
+        } else {
+            "q stop after the current item"
+        },
+    );
 }
 
 /// The receipt: what was freed per source, the disk before and after, and
@@ -389,6 +397,15 @@ mod tests {
         a.on_remove(RemoveEvent::Started(1));
         a.on_remove(RemoveEvent::Err(1, "changed since scan".into()));
         a.on_remove(RemoveEvent::Started(2));
+        insta::assert_snapshot!(render(&a).backend());
+    }
+
+    #[test]
+    fn snapshot_removing_while_stopping() {
+        let mut a = reviewing();
+        a.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        a.on_remove(RemoveEvent::Started(3));
+        a.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         insta::assert_snapshot!(render(&a).backend());
     }
 

@@ -3,7 +3,6 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crossbeam_channel::Sender;
 
@@ -46,26 +45,16 @@ impl Executor for RealExecutor {
     }
 
     fn command(&self, argv: &[String], cwd: Option<&Path>) -> Result<(), String> {
-        let (bin, args) = argv.split_first().ok_or("empty command")?;
-        let mut cmd = Command::new(bin);
-        cmd.args(args);
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-        let out = cmd.output().map_err(|e| format!("{bin}: {e}"))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let first = stderr
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("failed")
-                .trim();
-            Err(first.to_string())
-        }
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        crate::scan::run_timeout(&argv, cwd, REMOVAL_TIMEOUT)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
+
+/// Longest a native removal command may run (a large `docker system prune`
+/// or runtime delete is slow, a wedged daemon is not coming back).
+const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Last line of defence against a scanner bug: directory removals must stay
 /// inside the home folder, the scanned folder or a known extra root, and
@@ -100,6 +89,11 @@ impl Guard {
     pub fn check(&self, p: &Path) -> Result<(), String> {
         if !p.is_absolute() {
             return Err("refused: relative path".into());
+        }
+        // The checks below look at where `p` resolves; the removal then acts
+        // through `p`. A symlink would make those two different folders.
+        if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("refused: symlink".into());
         }
         let real = std::fs::canonicalize(p).map_err(|_| "changed since scan".to_string())?;
         if !self.roots.iter().any(|root| real.starts_with(root)) {
@@ -150,8 +144,27 @@ pub fn run_removals(
     recheck: &dyn Fn(&Item) -> Result<(), String>,
     tx: Sender<RemoveEvent>,
 ) {
+    let never = std::sync::atomic::AtomicBool::new(false);
+    run_removals_until(items, exec, guard, recheck, &never, tx);
+}
+
+/// Like [`run_removals`], skipping every item not started yet once `stop`
+/// is set. The item in progress always finishes: stopping a removal halfway
+/// would leave it half deleted.
+pub fn run_removals_until(
+    items: Vec<Item>,
+    exec: &dyn Executor,
+    guard: &Guard,
+    recheck: &dyn Fn(&Item) -> Result<(), String>,
+    stop: &std::sync::atomic::AtomicBool,
+    tx: Sender<RemoveEvent>,
+) {
     let mut repos_to_prune = BTreeSet::new();
     for item in &items {
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = tx.send(RemoveEvent::Err(item.id, "skipped: you quit".into()));
+            continue;
+        }
         let _ = tx.send(RemoveEvent::Started(item.id));
         let result = recheck(item).and_then(|()| match &item.removal {
             Removal::RemoveDir(p) => guard.check(p).and_then(|()| exec.remove_dir(p)),
@@ -185,12 +198,26 @@ const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Re-check an item right before removing it: its folder still exists, no
 /// process moved into it, and a clean worktree is still clean.
-pub fn default_recheck(inuse: &InUse) -> impl Fn(&Item) -> Result<(), String> + '_ {
+pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result<(), String> {
     move |item: &Item| {
         let changed = || Err("changed since scan".to_string());
+        // A fresh snapshot per item: a long batch must not decide on
+        // processes as they were when it started.
+        let inuse = snapshot();
         let busy: Vec<&str> = item.recheck.busy.iter().map(String::as_str).collect();
         if !busy.is_empty() && inuse.busy(&busy).is_some() {
             return changed();
+        }
+        if !item.recheck.args.is_empty() && inuse.args_containing(&item.recheck.args).is_some() {
+            return changed();
+        }
+        if let Some((argv, needle)) = &item.recheck.probe {
+            let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+            match crate::scan::run_timeout(&argv, None, GIT_TIMEOUT) {
+                Ok(out) if out.contains(needle.as_str()) => return changed(),
+                Ok(_) => {}
+                Err(err) => return Err(format!("could not check: {err}")),
+            }
         }
         let Some(path) = &item.path else {
             return Ok(());
@@ -234,6 +261,7 @@ mod tests {
     use crate::model::{Item, Removal, SourceId};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -375,6 +403,74 @@ mod tests {
     }
 
     #[test]
+    fn guard_refuses_a_path_swapped_for_a_symlink() {
+        // A cache folder replaced by a link to Documents must not be emptied
+        // through the link, even though the target is inside $HOME.
+        let (_d, h) = home();
+        fs::create_dir_all(h.join("Documents")).unwrap();
+        fs::create_dir_all(h.join("cache")).unwrap();
+        std::os::unix::fs::symlink(h.join("Documents"), h.join("cache/data")).unwrap();
+        let g = guard(&h);
+        assert_eq!(
+            g.check(&h.join("cache/data")),
+            Err("refused: symlink".into())
+        );
+        let exec = Fake::default();
+        let it = item(
+            1,
+            SourceId::DevCaches,
+            Some(h.join("cache/data")),
+            Removal::ClearDir(h.join("cache/data")),
+            1,
+        );
+        run(vec![it], &exec, &g, &ok);
+        assert!(exec.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stop_request_skips_the_items_not_started_yet() {
+        let (_d, h) = home();
+        let exec = Fake::default();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let items = vec![
+            item(
+                1,
+                SourceId::Docker,
+                None,
+                Removal::Command {
+                    argv: vec!["a".into()],
+                    cwd: None,
+                },
+                1,
+            ),
+            item(
+                2,
+                SourceId::Docker,
+                None,
+                Removal::Command {
+                    argv: vec!["b".into()],
+                    cwd: None,
+                },
+                1,
+            ),
+        ];
+        let stop_after_first = |_: &Item| {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        run_removals_until(items, &exec, &guard(&h), &stop_after_first, &stop, tx);
+        let events: Vec<RemoveEvent> = rx.iter().collect();
+        assert_eq!(*exec.calls.lock().unwrap(), vec!["a".to_string()]);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, RemoveEvent::Err(2, m) if m == "skipped: you quit"))
+        );
+        assert!(matches!(events.last(), Some(RemoveEvent::Finished)));
+    }
+
+    #[test]
     fn guard_with_root_target_still_rejects_system_paths() {
         let (_d, h) = home();
         let g = Guard::new(h.clone(), PathBuf::from("/"), vec![], vec![]);
@@ -428,11 +524,89 @@ mod tests {
         );
         it.status = vec![Status::Clean];
         let inuse = crate::inuse::InUse::default();
-        assert_eq!(default_recheck(&inuse)(&it), Ok(()));
+        assert_eq!(default_recheck(|| inuse.clone())(&it), Ok(()));
         fs::write(wt.join(".env"), "SECRET=1").unwrap();
         assert_eq!(
-            default_recheck(&inuse)(&it),
+            default_recheck(|| inuse.clone())(&it),
             Err("changed since scan".into())
+        );
+    }
+
+    #[test]
+    fn recheck_takes_a_fresh_process_snapshot_for_each_item() {
+        // A dev server started while earlier items were being removed.
+        let (_d, h) = home();
+        fs::create_dir_all(h.join("a/node_modules")).unwrap();
+        fs::create_dir_all(h.join("b/node_modules")).unwrap();
+        let snapshots = std::cell::Cell::new(0);
+        let b = h.join("b");
+        let fresh = || {
+            snapshots.set(snapshots.get() + 1);
+            if snapshots.get() == 1 {
+                crate::inuse::InUse::default()
+            } else {
+                crate::inuse::InUse::parse(&format!("p8\ncnode\nn{}\n", b.display()))
+            }
+        };
+        let recheck = default_recheck(fresh);
+        let item_in = |dir: &str| {
+            item(
+                1,
+                SourceId::Artifacts,
+                Some(h.join(dir).join("node_modules")),
+                Removal::RemoveDir(h.join(dir).join("node_modules")),
+                1,
+            )
+        };
+        let mut a = item_in("a");
+        a.recheck.scope = Some(h.join("a"));
+        let mut b_item = item_in("b");
+        b_item.recheck.scope = Some(h.join("b"));
+        assert_eq!(recheck(&a), Ok(()));
+        assert_eq!(recheck(&b_item), Err("changed since scan".into()));
+    }
+
+    #[test]
+    fn recheck_refuses_when_the_scan_lock_came_back() {
+        // An emulator started between the scan and `y`.
+        let mut it = item(
+            1,
+            SourceId::Android,
+            None,
+            Removal::RemoveDir("/x".into()),
+            1,
+        );
+        it.recheck.args = vec!["-avd Pixel_8".into()];
+        let running = || {
+            crate::inuse::InUse::parse("p7\ncqemu-system-aarch64\nn/\n").with_args(
+                &crate::inuse::InUse::parse_ps("7 qemu-system-aarch64 -avd Pixel_8\n"),
+            )
+        };
+        assert_eq!(
+            default_recheck(running)(&it),
+            Err("changed since scan".into())
+        );
+    }
+
+    #[test]
+    fn recheck_refuses_when_the_probe_output_names_the_item() {
+        // A simulator booted between the scan and `y`.
+        let mut it = item(1, SourceId::Ios, None, Removal::RemoveDir("/x".into()), 1);
+        it.recheck.probe = Some((
+            vec!["echo".into(), "iPhone (ABC-123) (Booted)".into()],
+            "ABC-123".into(),
+        ));
+        let none = crate::inuse::InUse::default;
+        assert_eq!(default_recheck(none)(&it), Err("changed since scan".into()));
+        it.recheck.probe = Some((
+            vec!["echo".into(), "nothing booted".into()],
+            "ABC-123".into(),
+        ));
+        assert_eq!(default_recheck(none)(&it), Ok(()));
+        it.recheck.probe = Some((vec!["false".into()], "ABC-123".into()));
+        assert!(
+            default_recheck(none)(&it).is_err(),
+            "a failing probe fails closed"
         );
     }
 
@@ -452,7 +626,7 @@ mod tests {
         let dev_server =
             crate::inuse::InUse::parse(&format!("p8\nnode\nn{}\n", h.join("proj/src").display()));
         assert_eq!(
-            default_recheck(&dev_server)(&it),
+            default_recheck(|| dev_server.clone())(&it),
             Err("changed since scan".into())
         );
         let mut cache = item(
@@ -465,7 +639,7 @@ mod tests {
         cache.recheck.busy = vec!["Xcode".into()];
         let xcode = crate::inuse::InUse::parse("p9\ncXcode\nn/\n");
         assert_eq!(
-            default_recheck(&xcode)(&cache),
+            default_recheck(|| xcode.clone())(&cache),
             Err("changed since scan".into())
         );
     }
@@ -668,13 +842,13 @@ mod tests {
             1,
         );
         let inuse = crate::inuse::InUse::parse(&format!("p3\ncnode\nn{}\n", h.join("a").display()));
-        assert!(default_recheck(&crate::inuse::InUse::default())(&present).is_ok());
+        assert!(default_recheck(crate::inuse::InUse::default)(&present).is_ok());
         assert_eq!(
-            default_recheck(&crate::inuse::InUse::default())(&missing),
+            default_recheck(crate::inuse::InUse::default)(&missing),
             Err("changed since scan".into())
         );
         assert_eq!(
-            default_recheck(&inuse)(&present),
+            default_recheck(|| inuse.clone())(&present),
             Err("changed since scan".into())
         );
     }
