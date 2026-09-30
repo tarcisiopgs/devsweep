@@ -5,8 +5,14 @@ project build artifacts, git worktrees left behind by coding agents, iOS
 simulators, Android emulators, Docker leftovers and dev tool caches.
 
 ```sh
-npx devsweep            # scan the current folder and the machine
-npx devsweep ~/code     # scan another folder
+npx @tarcisiopgs/devsweep            # scan the current folder and the machine
+npx @tarcisiopgs/devsweep ~/code     # scan another folder
+```
+
+Or install it once and run `devsweep`:
+
+```sh
+npm install -g @tarcisiopgs/devsweep
 ```
 
 macOS only (Apple silicon and Intel).
