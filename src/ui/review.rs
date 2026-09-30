@@ -6,9 +6,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::list::{frame, spinner};
+use super::list::{SIZE_W, bar, frame, spinner};
 use crate::app::{App, Progress, Screen};
-use crate::model::{Item, SourceId, format_size, format_size_long};
+use crate::model::{Item, SourceId, format_size_long};
 
 fn dim() -> Style {
     Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
@@ -96,7 +96,9 @@ pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::styled(source.label().to_string(), title()));
         for item in items {
             let size = Span::styled(
-                item.size.map(format_size).unwrap_or_else(|| "…".into()),
+                item.size
+                    .map(format_size_long)
+                    .unwrap_or_else(|| "…".into()),
                 Style::default().fg(Color::White),
             );
             lines.push(right_aligned(
@@ -145,7 +147,7 @@ fn progress_line(app: &App, item: &Item, width: u16) -> Line<'static> {
         ),
         Progress::Ok(bytes) => (
             Span::styled("  ✓ ", green()),
-            Span::styled(format_size(*bytes), green()),
+            Span::styled(format_size_long(*bytes), green()),
         ),
         Progress::Err(msg) => (
             Span::styled("  ✗ ", red()),
@@ -156,70 +158,141 @@ fn progress_line(app: &App, item: &Item, width: u16) -> Line<'static> {
 }
 
 pub fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
+    if app.screen == Screen::Done {
+        return draw_done(f, app, area);
+    }
     let (head, body, foot) = layout(f, app, area);
-    let (freed_n, freed) = app.freed_total();
-    let done = app.screen == Screen::Done;
-    let header = if done {
-        Line::styled(
-            format!("Freed {} in {freed_n} items", format_size_long(freed)),
-            green().add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!("{} Removing", spinner(app)),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+    let (_, freed) = app.freed_total();
+    let finished = app
+        .progress
+        .values()
+        .filter(|p| matches!(p, Progress::Ok(_) | Progress::Err(_)))
+        .count();
+    let header = Line::from(vec![
+        Span::styled(
+            format!("{} Removing", spinner(app)),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " · {finished} of {} · {} freed so far",
+                app.removal.len(),
+                format_size_long(freed)
             ),
-            Span::styled(
-                format!(" · {} freed so far", format_size_long(freed)),
-                title(),
-            ),
-        ])
-    };
+            title(),
+        ),
+    ]);
     f.render_widget(Paragraph::new(header), head);
 
     let mut lines = Vec::new();
     let mut focus = 0;
-    if done {
-        let failed: Vec<&Item> = app
-            .removal
-            .iter()
-            .filter(|i| matches!(app.progress.get(&i.id), Some(Progress::Err(_))))
-            .collect();
-        if failed.is_empty() {
-            lines.push(Line::styled("Everything selected was removed.", dim()));
-        } else {
-            lines.push(Line::styled(
-                format!("{} failed", failed.len()),
-                red().add_modifier(Modifier::BOLD),
-            ));
-            for item in failed {
-                lines.push(progress_line(app, item, body.width));
+    for (source, items) in grouped(app) {
+        lines.push(Line::styled(source.label().to_string(), title()));
+        for item in items {
+            if matches!(app.progress.get(&item.id), Some(Progress::Running)) {
+                focus = lines.len();
             }
-        }
-    } else {
-        for (source, items) in grouped(app) {
-            lines.push(Line::styled(source.label().to_string(), title()));
-            for item in items {
-                if matches!(app.progress.get(&item.id), Some(Progress::Running)) {
-                    focus = lines.len();
-                }
-                lines.push(progress_line(app, item, body.width));
-            }
+            lines.push(progress_line(app, item, body.width));
         }
     }
     f.render_widget(Paragraph::new(scroll(lines, focus, body.height)), body);
-    footer(
-        f,
-        foot,
-        if done {
-            "r rescan · q quit"
-        } else {
-            "q quit when finished"
-        },
+    footer(f, foot, "q quit when finished");
+}
+
+/// The receipt: what was freed per source, the disk before and after, and
+/// what was left alone with the reason and the next step.
+fn draw_done(f: &mut Frame, app: &App, area: Rect) {
+    let (head, body, foot) = layout(f, app, area);
+    let (_, freed) = app.freed_total();
+    let disk = match app.disk_free {
+        (Some(before), Some(after)) => Span::styled(
+            format!(
+                "disk free {} → {}",
+                format_size_long(before),
+                format_size_long(after)
+            ),
+            title(),
+        ),
+        _ => Span::raw(""),
+    };
+    f.render_widget(
+        Paragraph::new(right_aligned(
+            vec![Span::styled(
+                format!("✓ Freed {}", format_size_long(freed)),
+                green().add_modifier(Modifier::BOLD),
+            )],
+            disk,
+            head.width,
+        )),
+        head,
     );
+
+    let by_source = app.freed_by_source();
+    let label_w = by_source
+        .iter()
+        .map(|(s, _, _)| s.label().chars().count())
+        .max()
+        .unwrap_or(0);
+    let max = by_source.iter().map(|(_, _, b)| *b).max().unwrap_or(0);
+    let bar_w = (body.width as usize / 3).clamp(8, 24);
+    let mut lines = Vec::new();
+    for (source, n, bytes) in &by_source {
+        let noun = if *n == 1 { "item" } else { "items" };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<label_w$}  ", source.label()),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(bar(*bytes, max, bar_w), green()),
+            Span::styled(
+                format!(" {:>SIZE_W$}", format_size_long(*bytes)),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(format!("   {n} {noun}"), dim()),
+        ]));
+    }
+
+    let failed: Vec<&Item> = app
+        .removal
+        .iter()
+        .filter(|i| matches!(app.progress.get(&i.id), Some(Progress::Err(_))))
+        .collect();
+    if failed.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::styled("Everything selected was removed.", dim()));
+    } else {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            format!("✗ {} not removed", failed.len()),
+            red().add_modifier(Modifier::BOLD),
+        ));
+        let changed = failed
+            .iter()
+            .any(|i| matches!(app.progress.get(&i.id), Some(Progress::Err(m)) if m == "changed since scan"));
+        for item in failed {
+            lines.push(progress_line(app, item, body.width));
+        }
+        if changed {
+            lines.push(Line::styled(
+                "  Left alone on purpose: they changed after the scan.",
+                dim(),
+            ));
+        }
+        lines.push(Line::styled(
+            if changed {
+                "  Press r to scan again and review them."
+            } else {
+                "  Press r to scan again."
+            },
+            dim(),
+        ));
+    }
+    f.render_widget(Paragraph::new(lines), body);
+    footer(f, foot, "r rescan · q quit");
 }
 
 #[cfg(test)]
@@ -329,6 +402,7 @@ mod tests {
             a.on_remove(RemoveEvent::Ok(1, 412_000_000));
         }
         a.on_remove(RemoveEvent::Ok(2, 95_000_000));
+        a.disk_free = (Some(41_000_000_000), Some(43_100_000_000));
         a.on_remove(RemoveEvent::Finished);
         a
     }

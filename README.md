@@ -64,6 +64,8 @@ downloads everything again, so they are listed and left for you to decide.
 | `a` | toggle all unlocked items of the source |
 | `s` | sort by size, name or age |
 | `/` | filter |
+| `r` | scan again |
+| `?` | key and mark legend |
 | `⏎` | review what will be removed |
 | `y` | confirm on the review screen |
 | `q` | quit |

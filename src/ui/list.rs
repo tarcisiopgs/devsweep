@@ -1,16 +1,20 @@
-//! Main screen: source sidebar, item list and status bar.
+//! Main screen: source chart, item list and status bar.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::app::{App, Focus, SortBy, SourceState};
-use crate::model::{Item, Section, SourceId, Status, format_size, format_size_long};
+use crate::model::{Item, Section, SourceId, Status, format_size_long};
 
-pub const SIDEBAR_W: u16 = 24;
+/// Width of the size bar in the source chart.
+const SIDE_BAR_W: usize = 8;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Width of a size column: "999.9 GB".
+pub const SIZE_W: usize = 8;
+const ROW_BAR_W: usize = 6;
 
 fn yellow() -> Style {
     Style::default().fg(Color::Yellow)
@@ -18,14 +22,42 @@ fn yellow() -> Style {
 fn dim() -> Style {
     Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
 }
+fn white() -> Style {
+    Style::default().fg(Color::White)
+}
 fn title() -> Style {
-    Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD)
+    white().add_modifier(Modifier::BOLD)
 }
 
 pub fn spinner(app: &App) -> &'static str {
     SPINNER[(app.spinner_tick % SPINNER.len() as u64) as usize]
+}
+
+/// A bar of `width` cells for `value` out of `max`, in eighths of a cell.
+/// Anything above zero shows at least a sliver.
+pub fn bar(value: u64, max: u64, width: usize) -> String {
+    const EIGHTHS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    if max == 0 || value == 0 || width == 0 {
+        return " ".repeat(width);
+    }
+    let eighths = ((value as u128 * width as u128 * 8) / max as u128).max(1) as usize;
+    let eighths = eighths.min(width * 8);
+    let mut out = "█".repeat(eighths / 8);
+    out.push_str(EIGHTHS[eighths % 8]);
+    let used = eighths / 8 + usize::from(!eighths.is_multiple_of(8));
+    out.push_str(&" ".repeat(width - used));
+    out
+}
+
+/// What the user can do about a scan failure or note, if anything.
+pub fn recovery(msg: &str) -> Option<&'static str> {
+    if msg.contains("permission") {
+        Some("Allow Full Disk Access for your terminal, then press r.")
+    } else if msg.contains("daemon stopped") {
+        Some("Start Docker Desktop, then press r to scan again.")
+    } else {
+        None
+    }
 }
 
 /// `~/Workspace` instead of `/Users/me/Workspace`.
@@ -64,30 +96,54 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         draw_items(f, app, list);
     } else {
         let [side, list] =
-            Layout::horizontal([Constraint::Length(SIDEBAR_W), Constraint::Min(1)]).areas(body);
+            Layout::horizontal([Constraint::Length(sidebar_width(app)), Constraint::Min(1)])
+                .areas(body);
         draw_sidebar(f, app, side);
         draw_items(f, app, list);
     }
     draw_bar(f, app, bar);
+    if app.show_help {
+        draw_help(f, area);
+    }
 }
 
 /// Total shown next to a source: spinner, `error`, or its size.
 fn source_total(app: &App, source: SourceId) -> Span<'static> {
     let view = &app.sources[&source];
-    match &view.state {
-        SourceState::Scanning => Span::styled(format!("{} ", spinner(app)).repeat(1), yellow()),
-        SourceState::Failed(_) => Span::styled("error", Style::default().fg(Color::Red)),
-        SourceState::Done => {
-            let total = app.source_total(source);
-            if view.items.is_empty() {
-                Span::styled(format_size(total), dim())
-            } else {
-                Span::styled(format_size(total), Style::default().fg(Color::White))
-            }
+    let text = match &view.state {
+        SourceState::Scanning => {
+            return Span::styled(format!("{:>SIZE_W$}", spinner(app)), yellow());
         }
+        SourceState::Failed(_) => {
+            return Span::styled(
+                format!("{:>SIZE_W$}", "error"),
+                Style::default().fg(Color::Red),
+            );
+        }
+        SourceState::Done => format!("{:>SIZE_W$}", format_size_long(app.source_total(source))),
+    };
+    if view.items.is_empty() {
+        Span::styled(text, dim())
+    } else {
+        Span::styled(text, white())
     }
 }
 
+fn label_width(app: &App) -> usize {
+    app.visible_sources()
+        .iter()
+        .map(|s| s.label().chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// Gutter, label, bar and size, plus the right border.
+fn sidebar_width(app: &App) -> u16 {
+    (2 + label_width(app) + 1 + SIDE_BAR_W + 1 + SIZE_W + 1 + 1) as u16
+}
+
+/// Sources as a chart: each row carries a bar of its size against the
+/// largest source, and the focused one gets a gutter mark.
 fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let focused = app.focus == Focus::Sidebar;
     let block = Block::default()
@@ -96,47 +152,53 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    let sources = app.visible_sources();
+    let label_w = sources
+        .iter()
+        .map(|s| s.label().chars().count())
+        .max()
+        .unwrap_or(0);
+    let width = inner.width as usize;
+    let bar_w = width.saturating_sub(2 + label_w + 1 + 1 + SIZE_W + 1);
+    let max = sources
+        .iter()
+        .map(|s| app.source_total(*s))
+        .max()
+        .unwrap_or(0);
+
     let mut lines = Vec::new();
     let mut last_section = None;
-    for (i, source) in app.visible_sources().into_iter().enumerate() {
+    for (i, source) in sources.into_iter().enumerate() {
         let section = source.section();
         if last_section != Some(section) {
             if last_section.is_some() {
                 lines.push(Line::default());
             }
-            let header = match section {
-                Section::Folder => "THIS FOLDER",
-                Section::Machine => "MACHINE",
+            let name = match section {
+                Section::Folder => "this folder",
+                Section::Machine => "machine",
             };
-            lines.push(Line::styled(
-                format!(" {header}"),
-                dim().add_modifier(Modifier::BOLD),
-            ));
+            let rule = "─".repeat(width.saturating_sub(name.len() + 5));
+            lines.push(Line::styled(format!(" ── {name} {rule}"), dim()));
             last_section = Some(section);
         }
         let current = i == app.cursor_source;
-        let marker = if current { "▸ " } else { "  " };
-        let total = source_total(app, source);
-        let label_w = (inner.width as usize).saturating_sub(4 + total.width());
-        let label = format!(
-            "{:<label_w$}",
-            truncate(source.label(), label_w.saturating_sub(1))
-        );
         let empty = app.sources[&source].items.is_empty()
             && app.sources[&source].state == SourceState::Done;
-        let style = if current && focused {
-            yellow().add_modifier(Modifier::BOLD)
-        } else if current {
-            title()
-        } else if empty {
-            dim()
-        } else {
-            Style::default().fg(Color::White)
+        let (gutter, style) = match (current, focused) {
+            (true, true) => ("▌", yellow().add_modifier(Modifier::BOLD)),
+            (true, false) => ("▌", title()),
+            _ if empty => (" ", dim()),
+            _ => (" ", white()),
         };
+        let bar_style = if current && focused { yellow() } else { style };
         lines.push(Line::from(vec![
-            Span::styled(format!(" {marker}"), style),
-            Span::styled(label, style),
-            total,
+            Span::styled(gutter, style),
+            Span::raw(" "),
+            Span::styled(format!("{:<label_w$} ", source.label()), style),
+            Span::styled(bar(app.source_total(source), max, bar_w), bar_style),
+            Span::raw(" "),
+            source_total(app, source),
         ]));
     }
     f.render_widget(Paragraph::new(lines), inner);
@@ -151,10 +213,14 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         let style = if i == app.cursor_source {
             yellow().add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            white()
         };
-        spans.push(Span::styled(format!("{} ", source.label()), style));
-        spans.push(source_total(app, source));
+        spans.push(Span::styled(source.label().to_string(), style));
+        let total = source_total(app, source);
+        spans.push(Span::styled(
+            format!(" {}", total.content.trim_start()),
+            total.style,
+        ));
     }
     let block = Block::default()
         .borders(Borders::BOTTOM)
@@ -162,10 +228,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
-/// Status words for an item, colored by meaning.
+/// Status words for an item, colored by meaning. A locked item shows only
+/// who holds it; the `⊘` mark sits in the checkbox column.
 pub fn status_spans(item: &Item) -> Vec<Span<'static>> {
     if let Some(lock) = &item.lock {
-        return vec![Span::styled(format!("⊘ {lock}"), dim())];
+        return vec![Span::styled(lock.clone(), dim())];
     }
     let mut spans = Vec::new();
     for status in &item.status {
@@ -194,6 +261,12 @@ pub fn status_spans(item: &Item) -> Vec<Span<'static>> {
         };
         spans.push(Span::styled(text, style));
     }
+    if item.safe {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" · ", dim()));
+        }
+        spans.push(Span::styled("safe", dim()));
+    }
     spans
 }
 
@@ -203,6 +276,28 @@ fn truncate(s: &str, width: usize) -> String {
     }
     let cut: String = s.chars().take(width.saturating_sub(1)).collect();
     format!("{cut}…")
+}
+
+/// Heading of the item pane: source, total and count, or scan progress.
+fn heading(app: &App, source: SourceId, shown: usize) -> String {
+    let view = &app.sources[&source];
+    let noun = if shown == 1 { "item" } else { "items" };
+    match view.state {
+        SourceState::Done | SourceState::Failed(_) if view.items.is_empty() => {
+            source.label().to_string()
+        }
+        SourceState::Scanning => format!(
+            "{}  {} scanning · {} found",
+            source.label(),
+            spinner(app),
+            view.items.len()
+        ),
+        _ => format!(
+            "{}  {} · {shown} {noun}",
+            source.label(),
+            format_size_long(app.source_total(source))
+        ),
+    }
 }
 
 fn draw_items(f: &mut Frame, app: &App, area: Rect) {
@@ -223,7 +318,7 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
         SortBy::Name => "name",
         SortBy::Age => "age",
     };
-    let count = format!("{} · {} items", source.label(), items.len());
+    let count = heading(app, source, items.len());
     let filter = match (&app.filter, app.editing_filter) {
         (Some(f), true) => format!("  / {f}▏"),
         (Some(f), false) => format!("  / {f}"),
@@ -250,21 +345,40 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
     ];
     if let SourceState::Failed(msg) = &view.state {
         lines.push(Line::styled(msg.clone(), Style::default().fg(Color::Red)));
+        let hint = recovery(msg).unwrap_or("Press r to scan again.");
+        lines.push(Line::styled(hint, dim()));
     }
     for note in &view.notes {
         lines.push(Line::styled(note.clone(), dim()));
+        if let Some(hint) = recovery(note) {
+            lines.push(Line::styled(hint, dim()));
+        }
+    }
+    // A failure or a note already says why the list is empty.
+    let explained = matches!(view.state, SourceState::Failed(_)) || !view.notes.is_empty();
+    if items.is_empty() && !explained {
+        let msg = match (&view.state, source.section(), &app.filter) {
+            (SourceState::Scanning, _, _) => "Rows appear here as they are found.".to_string(),
+            (_, _, Some(f)) if !f.is_empty() => format!("Nothing matches \"{f}\"."),
+            (_, Section::Folder, _) => format!("Nothing to clean under {}.", tilde(app)),
+            (_, Section::Machine, _) => "Nothing to clean here.".to_string(),
+        };
+        lines.push(Line::styled(msg, dim()));
     }
 
     let rows = (area.height as usize).saturating_sub(lines.len());
     let offset = app.cursor_item.saturating_sub(rows.saturating_sub(1));
-    let size_w = 7;
-    let status_w = ((area.width as usize) / 3).min(28);
-    let label_w = (area.width as usize).saturating_sub(4 + status_w + size_w + 2);
+    let status_w = ((area.width as usize) / 3).min(30);
+    let label_w =
+        (area.width as usize).saturating_sub(4 + 2 + status_w + 1 + ROW_BAR_W + 1 + SIZE_W);
+    let max = items.iter().filter_map(|i| i.size).max().unwrap_or(0);
     for (i, item) in items.iter().enumerate().skip(offset).take(rows) {
         let is_cursor = focused && i == app.cursor_item;
         let selected = app.selected.contains(&item.id);
         let locked = item.lock.is_some();
-        let check = if selected {
+        let check = if locked {
+            Span::styled(" ⊘  ", dim())
+        } else if selected {
             Span::styled("[x] ", Style::default().fg(Color::Green))
         } else {
             Span::styled("[ ] ", dim())
@@ -274,7 +388,7 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
         } else if locked {
             dim()
         } else {
-            Style::default().fg(Color::White)
+            white()
         };
         let mut status = status_spans(item);
         let status_len: usize = status.iter().map(|s| s.width()).sum();
@@ -285,21 +399,23 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
         } else {
             status.push(Span::raw(" ".repeat(status_w - status_len)));
         }
-        let size = item.size.map(format_size).unwrap_or_else(|| "…".into());
+        let size = item
+            .size
+            .map(format_size_long)
+            .unwrap_or_else(|| "…".into());
+        let value_style = if locked { dim() } else { white() };
         let mut spans = vec![
             check,
             Span::styled(truncate(&item.label, label_w), label_style),
             Span::raw("  "),
         ];
         spans.extend(status);
+        spans.push(Span::raw(" "));
         spans.push(Span::styled(
-            format!("{size:>size_w$}"),
-            if locked {
-                dim()
-            } else {
-                Style::default().fg(Color::White)
-            },
+            bar(item.size.unwrap_or(0), max, ROW_BAR_W),
+            value_style,
         ));
+        spans.push(Span::styled(format!(" {size:>SIZE_W$}"), value_style));
         let mut line = Line::from(spans);
         if locked {
             line = line.patch_style(Style::default().add_modifier(Modifier::DIM));
@@ -311,7 +427,7 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let (n, bytes) = app.selected_total();
-    let keys = "space toggle · tab pane · a all · s sort · / filter · ⏎ review · q quit";
+    let keys = "space toggle · ⏎ review · ? help · a all · s sort · / filter · q quit";
     let line = Line::from(vec![
         Span::styled(
             format!(" {n} selected · {}", format_size_long(bytes)),
@@ -323,6 +439,76 @@ fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     ]);
     let block = Block::default().borders(Borders::TOP).border_style(dim());
     f.render_widget(Paragraph::new(line).block(block), area);
+}
+
+/// Key and mark legend, centered over the list.
+fn draw_help(f: &mut Frame, area: Rect) {
+    let key = |k: &str, what: &str| {
+        Line::from(vec![
+            Span::styled(format!("  {k:<11}"), yellow()),
+            Span::styled(what.to_string(), white()),
+        ])
+    };
+    let mark = |m: Span<'static>, what: &str| {
+        Line::from(vec![
+            Span::raw("  "),
+            m,
+            Span::styled(what.to_string(), white()),
+        ])
+    };
+    let lines = vec![
+        key("↑↓ j k", "move"),
+        key("tab ← →", "switch between sources and items"),
+        key("space", "select or unselect the item"),
+        key("a", "select every unlocked item of the source"),
+        key("s", "sort by size, name or age"),
+        key("/", "filter by name"),
+        key("r", "scan again"),
+        key("⏎", "review what will be removed"),
+        key("q", "quit"),
+        Line::default(),
+        mark(
+            Span::styled("[x]        ", Style::default().fg(Color::Green)),
+            "selected",
+        ),
+        mark(
+            Span::styled(" ⊘         ", dim()),
+            "locked: in use, cannot be selected",
+        ),
+        mark(
+            Span::styled("safe       ", dim()),
+            "regenerates by itself; preselected",
+        ),
+        mark(
+            Span::styled("merged     ", Style::default().fg(Color::Green)),
+            "its branch is in the default branch",
+        ),
+        mark(
+            Span::styled("dirty      ", Style::default().fg(Color::Red)),
+            "would lose uncommitted or ignored files",
+        ),
+        mark(
+            Span::styled("stale      ", Style::default().fg(Color::Cyan)),
+            "no commit for a while",
+        ),
+    ];
+    let w = 60.min(area.width.saturating_sub(4));
+    let h = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(yellow())
+        .title(Span::styled(
+            " help · any key closes ",
+            yellow().add_modifier(Modifier::BOLD),
+        ));
+    f.render_widget(Clear, rect);
+    f.render_widget(Paragraph::new(lines).block(block), rect);
 }
 
 #[cfg(test)]
@@ -511,6 +697,44 @@ mod tests {
     #[test]
     fn snapshot_too_small() {
         insta::assert_snapshot!(render(&mockup(), 30, 8).backend());
+    }
+
+    #[test]
+    fn bar_scales_in_eighths_and_never_hides_a_nonzero_value() {
+        assert_eq!(super::bar(100, 100, 4), "████");
+        assert_eq!(super::bar(50, 100, 4), "██  ");
+        assert_eq!(super::bar(1, 1_000_000, 4), "▏   ");
+        assert_eq!(super::bar(0, 100, 4), "    ");
+    }
+
+    #[test]
+    fn failures_and_notes_carry_their_next_step() {
+        assert!(
+            super::recovery("permission denied")
+                .unwrap()
+                .contains("Full Disk Access")
+        );
+        assert!(super::recovery("3 folders skipped (no permission)").is_some());
+        assert!(
+            super::recovery("daemon stopped")
+                .unwrap()
+                .contains("Docker Desktop")
+        );
+        assert_eq!(super::recovery("something else"), None);
+    }
+
+    #[test]
+    fn snapshot_help_overlay() {
+        let mut a = mockup();
+        a.on_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        insta::assert_snapshot!(render(&a, 100, 24).backend());
+    }
+
+    #[test]
+    fn snapshot_empty_folder_source() {
+        let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Worktrees]);
+        a.on_scan(ScanEvent::Done(SourceId::Worktrees));
+        insta::assert_snapshot!(render(&a, 100, 12).backend());
     }
 
     #[test]
