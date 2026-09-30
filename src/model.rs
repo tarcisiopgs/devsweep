@@ -111,6 +111,15 @@ fn quote(s: &str) -> String {
     }
 }
 
+/// What to check again right before removing an item.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recheck {
+    /// Folder whose live processes lock the item (defaults to its path).
+    pub scope: Option<PathBuf>,
+    /// Process names that lock the item while running.
+    pub busy: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub id: ItemId,
@@ -123,6 +132,7 @@ pub struct Item {
     pub safe: bool,
     pub removal: Removal,
     pub age_days: Option<u32>,
+    pub recheck: Recheck,
 }
 
 impl Item {
@@ -189,6 +199,7 @@ mod tests {
             safe: false,
             removal: Removal::RemoveDir(PathBuf::from("/tmp/x")),
             age_days: None,
+            recheck: crate::model::Recheck::default(),
         }
     }
 

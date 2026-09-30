@@ -74,6 +74,7 @@ impl Scanner for Xcode {
                 safe: false,
                 removal: Removal::RemoveDir(path.clone()),
                 age_days: None,
+                recheck: crate::model::Recheck::default(),
             };
             let _ = tx.send(ScanEvent::Found(item));
             size_later(path, id, tx.clone());

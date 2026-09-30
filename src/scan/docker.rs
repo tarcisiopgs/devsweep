@@ -112,6 +112,7 @@ impl Docker {
                 safe,
                 removal,
                 age_days: None,
+                recheck: crate::model::Recheck::default(),
             };
         let mut items = Vec::new();
 

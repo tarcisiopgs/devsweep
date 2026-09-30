@@ -81,10 +81,12 @@ impl Guard {
         protected: Vec<PathBuf>,
         extra_roots: Vec<PathBuf>,
     ) -> Guard {
-        let roots: Vec<PathBuf> = [home, target]
-            .into_iter()
-            .chain(extra_roots)
-            .map(canon)
+        let (home, target) = (canon(home), canon(target));
+        // A target above the home folder (`/`, `/Users`) must not widen the roots.
+        let target = (!home.starts_with(&target)).then_some(target);
+        let roots: Vec<PathBuf> = std::iter::once(home)
+            .chain(target)
+            .chain(extra_roots.into_iter().map(canon))
             .collect();
         let protected = protected.into_iter().map(canon).collect();
         Guard { roots, protected }
@@ -164,10 +166,15 @@ pub fn run_removals(
 pub fn default_recheck(inuse: &InUse) -> impl Fn(&Item) -> Result<(), String> + '_ {
     move |item: &Item| {
         let changed = || Err("changed since scan".to_string());
+        let busy: Vec<&str> = item.recheck.busy.iter().map(String::as_str).collect();
+        if !busy.is_empty() && inuse.busy(&busy).is_some() {
+            return changed();
+        }
         let Some(path) = &item.path else {
             return Ok(());
         };
-        if !path.exists() || inuse.lock_for(path).is_some() {
+        let scope = item.recheck.scope.as_ref().unwrap_or(path);
+        if !path.exists() || inuse.lock_for(scope).is_some() {
             return changed();
         }
         let is_worktree = matches!(item.source, SourceId::Worktrees | SourceId::AgentWorktrees);
@@ -239,6 +246,7 @@ mod tests {
             safe: false,
             removal,
             age_days: None,
+            recheck: crate::model::Recheck::default(),
         }
     }
 
@@ -286,6 +294,48 @@ mod tests {
         assert!(g.check(&h.join("work")).is_err());
         assert!(g.check(&h.join("a/node_modules")).is_ok());
         assert!(g.check(&h.join("work/b/node_modules")).is_ok());
+    }
+
+    #[test]
+    fn guard_with_root_target_still_rejects_system_paths() {
+        let (_d, h) = home();
+        let g = Guard::new(h.clone(), PathBuf::from("/"), vec![], vec![]);
+        assert!(g.check(Path::new("/etc")).is_err());
+        assert!(g.check(Path::new("/usr/bin")).is_err());
+    }
+
+    #[test]
+    fn recheck_uses_lock_scope_and_busy_names() {
+        let (_d, h) = home();
+        fs::create_dir_all(h.join("proj/node_modules")).unwrap();
+        fs::create_dir_all(h.join("proj/src")).unwrap();
+        let mut it = item(
+            1,
+            SourceId::Artifacts,
+            Some(h.join("proj/node_modules")),
+            Removal::RemoveDir(h.join("proj/node_modules")),
+            1,
+        );
+        it.recheck.scope = Some(h.join("proj"));
+        let dev_server =
+            crate::inuse::InUse::parse(&format!("p8\nnode\nn{}\n", h.join("proj/src").display()));
+        assert_eq!(
+            default_recheck(&dev_server)(&it),
+            Err("changed since scan".into())
+        );
+        let mut cache = item(
+            2,
+            SourceId::DevCaches,
+            Some(h.join("proj")),
+            Removal::ClearDir(h.join("proj")),
+            1,
+        );
+        cache.recheck.busy = vec!["Xcode".into()];
+        let xcode = crate::inuse::InUse::parse("p9\ncXcode\nn/\n");
+        assert_eq!(
+            default_recheck(&xcode)(&cache),
+            Err("changed since scan".into())
+        );
     }
 
     #[test]

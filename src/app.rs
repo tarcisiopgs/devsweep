@@ -119,7 +119,9 @@ impl App {
     pub fn on_scan(&mut self, ev: ScanEvent) {
         match ev {
             ScanEvent::Found(item) => {
-                if item.preselected() {
+                // Once the review is open the selection is frozen: nothing
+                // may join it without being shown first.
+                if item.preselected() && self.screen == Screen::List {
                     self.selected.insert(item.id);
                 }
                 self.view(item.source).items.push(item);
@@ -479,6 +481,7 @@ mod tests {
                 cwd: None,
             },
             age_days: Some(id as u32),
+            recheck: crate::model::Recheck::default(),
         }
     }
 
@@ -525,6 +528,28 @@ mod tests {
             false,
         )));
         assert!(a.selected.contains(&1));
+    }
+
+    #[test]
+    fn items_found_during_review_are_not_preselected() {
+        let mut a = with_worktrees(vec![item(
+            1,
+            SourceId::Worktrees,
+            "w",
+            Some(1),
+            true,
+            false,
+        )]);
+        a.on_key(key(KeyCode::Enter));
+        a.on_scan(ScanEvent::Found(item(
+            2,
+            SourceId::Docker,
+            "late",
+            Some(1),
+            true,
+            false,
+        )));
+        assert!(!a.selected.contains(&2));
     }
 
     #[test]

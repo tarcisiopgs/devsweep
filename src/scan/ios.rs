@@ -104,6 +104,7 @@ pub fn devices_from_json(json: &str, ctx: &ScanCtx) -> anyhow::Result<Vec<Item>>
                     cwd: None,
                 },
                 age_days: last_used,
+                recheck: crate::model::Recheck::default(),
             });
         }
     }
@@ -161,6 +162,7 @@ pub fn runtimes_from_json(
                     cwd: None,
                 },
                 age_days: last_used,
+                recheck: crate::model::Recheck::default(),
             }
         })
         .collect();

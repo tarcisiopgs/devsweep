@@ -212,6 +212,10 @@ impl Scanner for Catalog {
                 safe: rule.safe,
                 removal,
                 age_days: None,
+                recheck: crate::model::Recheck {
+                    scope: None,
+                    busy: rule.busy_when.clone(),
+                },
             };
             let _ = tx.send(ScanEvent::Found(item));
         });

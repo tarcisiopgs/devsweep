@@ -355,6 +355,7 @@ mod tests {
                 cwd: None,
             },
             age_days: None,
+            recheck: crate::model::Recheck::default(),
         }
     }
 

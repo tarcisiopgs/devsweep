@@ -245,6 +245,7 @@ mod tests {
             safe: true,
             removal,
             age_days: None,
+            recheck: crate::model::Recheck::default(),
         }
     }
 

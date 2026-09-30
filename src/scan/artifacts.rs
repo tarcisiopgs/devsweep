@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -124,7 +125,9 @@ fn is_pruned(path: &Path, ctx: &ScanCtx) -> bool {
     if name == ".git" {
         return true;
     }
-    path.parent() == Some(ctx.home.as_path()) && (name == "Library" || name == ".Trash")
+    // Right under the home folder, `Library` and dot-folders hold tools
+    // (global npm, editor extensions, caches), not projects.
+    path.parent() == Some(ctx.home.as_path()) && (name == "Library" || name.starts_with('.'))
 }
 
 fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
@@ -153,6 +156,10 @@ fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
         safe: false,
         removal: Removal::RemoveDir(path.to_path_buf()),
         age_days: age_days(path, &project),
+        recheck: crate::model::Recheck {
+            scope: Some(project.clone()),
+            busy: vec![],
+        },
     };
     let _ = tx.send(ScanEvent::Found(item));
     size_later(path.to_path_buf(), id, tx.clone());
@@ -205,7 +212,7 @@ fn check_ignore(repo: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
     let child = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["check-ignore", "--stdin"])
+        .args(["check-ignore", "--stdin", "-z"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -213,16 +220,18 @@ fn check_ignore(repo: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
     let Ok(mut child) = child else { return vec![] };
     if let Some(mut stdin) = child.stdin.take() {
         for p in paths {
-            let _ = writeln!(stdin, "{}", p.display());
+            let _ = stdin.write_all(p.as_os_str().as_encoded_bytes());
+            let _ = stdin.write_all(b"\0");
         }
     }
     let Ok(out) = child.wait_with_output() else {
         return vec![];
     };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|line| {
-            let p = PathBuf::from(line);
+    out.stdout
+        .split(|b| *b == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| {
+            let p = PathBuf::from(std::ffi::OsStr::from_bytes(chunk));
             if p.is_absolute() { p } else { repo.join(p) }
         })
         .collect()
@@ -317,6 +326,37 @@ mod tests {
         fs::write(repo.join(".gitignore"), "dist\n").unwrap();
         mk(&repo, "dist");
         assert_eq!(items(&scan_with(d.path(), InUse::default())).len(), 1);
+    }
+
+    #[test]
+    fn accented_ignored_dist_is_found_with_real_path() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("projé");
+        init_repo(&repo);
+        fs::write(repo.join(".gitignore"), "build\n").unwrap();
+        mk(&repo, "build");
+        let ev = scan_with(d.path(), InUse::default());
+        let found = items(&ev);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].path.as_ref().unwrap().exists());
+    }
+
+    #[test]
+    fn dot_folders_under_home_are_skipped() {
+        let d = tempfile::tempdir().unwrap();
+        mk(d.path(), ".nvm/versions/node/v22/lib/node_modules");
+        mk(d.path(), ".vscode/extensions/x/node_modules");
+        mk(d.path(), "code/.hidden-proj/node_modules");
+        let ev = scan_with(d.path(), InUse::default());
+        let found = items(&ev);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .ends_with("code/.hidden-proj/node_modules")
+        );
     }
 
     #[test]

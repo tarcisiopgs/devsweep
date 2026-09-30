@@ -134,6 +134,7 @@ fn describe(
             safe: false,
             removal: Removal::RemoveDir(wt.to_path_buf()),
             age_days: None,
+            recheck: crate::model::Recheck::default(),
         };
     };
     let removal = Removal::Command {
@@ -159,6 +160,7 @@ fn describe(
             safe: false,
             removal,
             age_days: None,
+            recheck: crate::model::Recheck::default(),
         };
     };
     let head = git(wt, &["rev-parse", "HEAD"]).unwrap_or_default();
@@ -194,6 +196,7 @@ fn describe(
         lock,
         removal,
         age_days: age,
+        recheck: crate::model::Recheck::default(),
     }
 }
 
@@ -336,13 +339,22 @@ impl Scanner for AgentWorktrees {
                 if ctx.seen_worktrees.lock().unwrap().contains(&wt) {
                     continue;
                 }
-                let main = git(
-                    &wt,
-                    &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-                )
-                .map(PathBuf::from)
-                .and_then(|common| common.parent().map(Path::to_path_buf))
-                .filter(|main| main.join(".git").exists());
+                let main = match main_repo(&wt) {
+                    MainRepo::Found(main) => Some(main),
+                    MainRepo::Gone => None,
+                    MainRepo::Unknown => {
+                        emit(
+                            tx,
+                            unknown(
+                                ctx,
+                                &wt,
+                                agent_label(&ctx.home, &wt)
+                                    .unwrap_or_else(|| tilde(&ctx.home, &wt)),
+                            ),
+                        );
+                        continue;
+                    }
+                };
                 let label = agent_label(&ctx.home, &wt)
                     .or_else(|| {
                         let short = root
@@ -363,6 +375,74 @@ impl Scanner for AgentWorktrees {
             }
         }
         Ok(())
+    }
+}
+
+enum MainRepo {
+    /// The repository (or bare repository) that owns the worktree.
+    Found(PathBuf),
+    /// The worktree's `gitdir:` target no longer exists.
+    Gone,
+    /// git could not tell (failure, timeout, privacy prompt).
+    Unknown,
+}
+
+/// Owner of a linked worktree. Only a missing `gitdir:` target counts as
+/// gone; any git failure is unknown, never a reason to delete the folder.
+fn main_repo(wt: &Path) -> MainRepo {
+    let Ok(dotgit) = std::fs::read_to_string(wt.join(".git")) else {
+        return MainRepo::Unknown;
+    };
+    let Some(gitdir) = dotgit
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(|g| PathBuf::from(g.trim()))
+    else {
+        return MainRepo::Unknown;
+    };
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        wt.join(gitdir)
+    };
+    if !gitdir.exists() {
+        return MainRepo::Gone;
+    }
+    let Some(common) = git(
+        wt,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(PathBuf::from) else {
+        return MainRepo::Unknown;
+    };
+    if common.file_name().is_some_and(|n| n == ".git") {
+        match common.parent() {
+            Some(parent) => MainRepo::Found(parent.to_path_buf()),
+            None => MainRepo::Unknown,
+        }
+    } else {
+        // Bare repository: git commands run inside it directly.
+        MainRepo::Found(common)
+    }
+}
+
+/// A worktree git could not describe: shown, locked, never removable.
+fn unknown(ctx: &ScanCtx, wt: &Path, label: String) -> Item {
+    Item {
+        id: ctx.next_id(),
+        source: SourceId::AgentWorktrees,
+        label,
+        path: Some(wt.to_path_buf()),
+        size: None,
+        status: vec![Status::Detail("status unknown".into())],
+        lock: Some("git did not answer".into()),
+        safe: false,
+        removal: Removal::Command {
+            argv: vec!["git".into(), "worktree".into(), "list".into()],
+            cwd: Some(wt.to_path_buf()),
+        },
+        age_days: None,
+        recheck: crate::model::Recheck::default(),
     }
 }
 
@@ -649,6 +729,84 @@ mod tests {
         assert!(
             matches!(&items[0].removal, Removal::Command { argv, .. } if argv[1] == "worktree")
         );
+    }
+
+    #[test]
+    fn agent_worktree_of_bare_repo_is_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let r = home.join("r");
+        repo(&r);
+        let bare = home.join("bare.git");
+        git(
+            &home,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                r.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let root = home.join(".codex/worktrees");
+        fs::create_dir_all(&root).unwrap();
+        git(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                root.join("w").to_str().unwrap(),
+                "main",
+            ],
+        );
+        let items = run_agent(
+            &ctx(&home.join("elsewhere"), &home, InUse::default()),
+            vec![root],
+        );
+        assert!(
+            !items[0].status.contains(&Status::Broken),
+            "{:?}",
+            items[0].status
+        );
+        assert!(matches!(&items[0].removal, Removal::Command { cwd: Some(c), .. } if *c == bare));
+    }
+
+    #[test]
+    fn agent_worktree_with_failing_git_is_locked_unknown() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let r = home.join("r");
+        repo(&r);
+        let root = home.join(".codex/worktrees");
+        fs::create_dir_all(&root).unwrap();
+        let wt = root.join("w");
+        git(
+            &r,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                wt.to_str().unwrap(),
+                "main",
+            ],
+        );
+        // gitdir still exists, but its commondir points nowhere: git fails.
+        fs::write(
+            r.join(".git/worktrees/w/commondir"),
+            "/nonexistent/devsweep\n",
+        )
+        .unwrap();
+        let items = run_agent(
+            &ctx(&home.join("elsewhere"), &home, InUse::default()),
+            vec![root],
+        );
+        assert!(!items[0].status.contains(&Status::Broken));
+        assert!(items[0].lock.is_some());
+        assert!(!items[0].safe);
+        assert!(!matches!(items[0].removal, Removal::RemoveDir(_)));
     }
 
     #[test]

@@ -1,10 +1,15 @@
 name: Publish to npm
 
-# Runs after cargo-dist published a GitHub Release: repackages the macOS
-# binaries as per-platform npm packages and publishes the `devsweep` shim.
+# Called by cargo-dist's release workflow (publish-jobs in dist-workspace.toml):
+# repackages the macOS binaries as per-platform npm packages and publishes the
+# `devsweep` shim. A `release: published` trigger would never fire, because the
+# release is created with GITHUB_TOKEN.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,21 +20,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: dl
+          merge-multiple: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - name: Build and publish packages
         env:
-          GH_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ fromJson(inputs.plan).announcement_tag }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
           for pair in "arm64:aarch64-apple-darwin" "x64:x86_64-apple-darwin"; do
             ARCH="${pair%%:*}"; TARGET="${pair#*:}"
-            gh release download "$TAG" --pattern "devsweep-$TARGET.tar.xz" --dir dl
             mkdir -p "pkg-$ARCH/bin"
             tar -xJf "dl/devsweep-$TARGET.tar.xz" -C dl
             cp "dl/devsweep-$TARGET/devsweep" "pkg-$ARCH/bin/devsweep"

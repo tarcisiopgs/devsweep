@@ -14,6 +14,23 @@ pub struct Android {
     pub avd_home: PathBuf,
 }
 
+/// Where AVDs live: `$ANDROID_AVD_HOME`, else `avd/` under
+/// `$ANDROID_USER_HOME` or `$ANDROID_EMULATOR_HOME`, else `.android/avd`
+/// under `$ANDROID_SDK_HOME` or the home folder.
+pub fn avd_home_from(env: &dyn Fn(&str) -> Option<std::ffi::OsString>, home: &Path) -> PathBuf {
+    let from = |key: &str, rel: &str| {
+        env(key).filter(|v| !v.is_empty()).map(|v| {
+            let base = PathBuf::from(v);
+            if rel.is_empty() { base } else { base.join(rel) }
+        })
+    };
+    from("ANDROID_AVD_HOME", "")
+        .or_else(|| from("ANDROID_USER_HOME", "avd"))
+        .or_else(|| from("ANDROID_EMULATOR_HOME", "avd"))
+        .or_else(|| from("ANDROID_SDK_HOME", ".android/avd"))
+        .unwrap_or_else(|| home.join(".android/avd"))
+}
+
 impl Android {
     /// Locate the SDK (`$ANDROID_HOME`, `$ANDROID_SDK_ROOT`, the Android
     /// Studio default) and the AVD home (`$ANDROID_AVD_HOME`, `~/.android/avd`).
@@ -24,9 +41,7 @@ impl Android {
             .map(PathBuf::from)
             .chain(std::iter::once(home.join("Library/Android/sdk")))
             .find(|p| p.is_dir());
-        let avd_home = std::env::var_os("ANDROID_AVD_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".android/avd"));
+        let avd_home = avd_home_from(&|k| std::env::var_os(k), home);
         Android { sdk, avd_home }
     }
 
@@ -43,8 +58,11 @@ impl Android {
             .map(|sdk| sdk.join("cmdline-tools/latest/bin/avdmanager"))
             .filter(|p| p.is_file());
         let mut referenced = HashSet::new();
+        let avds = self.avds();
+        // Without any AVD we cannot tell which images are in use.
+        let images_safe = !avds.is_empty();
 
-        for (name, dir) in self.avds() {
+        for (name, dir) in avds {
             if let Some(sysdir) = read_ini(&dir.join("config.ini"), "image.sysdir.1") {
                 referenced.insert(sysdir.trim_end_matches('/').to_string());
             }
@@ -90,6 +108,7 @@ impl Android {
                 safe: false,
                 removal,
                 age_days: age,
+                recheck: crate::model::Recheck::default(),
             };
             emit(tx, item);
         }
@@ -113,9 +132,10 @@ impl Android {
                     size: None,
                     status: vec![Status::Orphan],
                     lock: None,
-                    safe: true,
+                    safe: images_safe,
                     removal: Removal::RemoveDir(path),
                     age_days: None,
+                    recheck: crate::model::Recheck::default(),
                 };
                 emit(tx, item);
             }
@@ -214,7 +234,7 @@ mod tests {
     use crate::inuse::InUse;
     use crate::model::{Removal, Status};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn make_avd(avd_home: &Path, name: &str, sysdir: &str) {
         let dir = avd_home.join(format!("{name}.avd"));
@@ -355,6 +375,40 @@ mod tests {
                 d.path()
                     .join("sdk/system-images/android-30/default/arm64-v8a")
             )
+        );
+    }
+
+    #[test]
+    fn images_are_not_safe_when_no_avd_was_found() {
+        let d = tempfile::tempdir().unwrap();
+        let sdk = d.path().join("sdk");
+        make_image(&sdk, "system-images/android-34/google_apis/arm64-v8a");
+        let a = Android {
+            sdk: Some(sdk),
+            avd_home: d.path().join("nowhere"),
+        };
+        let items = scan(&a, "");
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].safe);
+    }
+
+    #[test]
+    fn avd_home_honours_android_env_vars() {
+        let home = std::path::Path::new("/Users/u");
+        let env =
+            |k: &str| (k == "ANDROID_USER_HOME").then(|| std::ffi::OsString::from("/data/android"));
+        assert_eq!(
+            avd_home_from(&env, home),
+            PathBuf::from("/data/android/avd")
+        );
+        let env = |k: &str| (k == "ANDROID_SDK_HOME").then(|| std::ffi::OsString::from("/sdkhome"));
+        assert_eq!(
+            avd_home_from(&env, home),
+            PathBuf::from("/sdkhome/.android/avd")
+        );
+        assert_eq!(
+            avd_home_from(&|_: &str| None, home),
+            PathBuf::from("/Users/u/.android/avd")
         );
     }
 
