@@ -37,6 +37,15 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
+Git hooks run the same checks locally through [prek](https://prek.j178.dev), a Rust drop-in for pre-commit. Install them once per clone:
+
+```sh
+brew install prek          # or: cargo install --locked prek
+prek install -t pre-commit -t pre-push
+```
+
+`pre-commit` runs `cargo fmt --check` and clippy, and `pre-push` runs `cargo test`. The config lives in `.pre-commit-config.yaml`.
+
 TUI changes come with `insta` snapshots: run `cargo insta review` and check every snapshot against the design before accepting it.
 
 ## Releasing

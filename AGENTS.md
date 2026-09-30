@@ -18,9 +18,10 @@ cargo clippy --all-targets -- -D warnings    # must be clean, CI enforces it
 cargo fmt                                    # CI runs cargo fmt --check
 cargo insta review                           # accept or reject changed TUI snapshots
 cargo run -- ~/some/folder                   # run the TUI against a folder
+prek install -t pre-commit -t pre-push       # git hooks: fmt + clippy on commit, tests on push
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on `macos-latest` for every pull request. The `check` job is a required status check on `main`.
+CI (`.github/workflows/ci.yml`) runs on `macos-latest` for every pull request, in separate jobs: Lint (fmt and clippy), Typecheck (`cargo check`), Test, and Build (the release build for both macOS targets). The `check` job only passes when all of them pass, and it is the required status check on `main`.
 
 Never confirm a removal (`y` on the review screen) while testing against a real machine unless the user asks for it in that conversation.
 

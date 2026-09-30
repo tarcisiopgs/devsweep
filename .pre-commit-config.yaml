@@ -1,0 +1,38 @@
+# Git hooks, run by prek (https://prek.j178.dev, a Rust drop-in for pre-commit).
+#
+# Install once per clone:
+#   brew install prek          # or: cargo install --locked prek
+#   prek install -t pre-commit -t pre-push
+#
+# pre-commit: format and lint, the same checks as the CI Lint job.
+# pre-push:   the whole test suite.
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --locked -- -D warnings
+        language: system
+        types_or: [rust, toml]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      # Git runs hooks with GIT_DIR, GIT_INDEX_FILE and friends set. The tests
+      # create throwaway repos with git, so those variables must not leak into
+      # them, or they would write to this repository instead.
+      - id: cargo-test
+        name: cargo test
+        entry: sh -c 'unset $(git rev-parse --local-env-vars); exec cargo test --locked'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
