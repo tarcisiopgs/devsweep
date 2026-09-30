@@ -59,8 +59,6 @@ impl Android {
             .filter(|p| p.is_file());
         let mut referenced = HashSet::new();
         let avds = self.avds();
-        // Without any AVD we cannot tell which images are in use.
-        let images_safe = !avds.is_empty();
 
         for (name, dir) in avds {
             if let Some(sysdir) = read_ini(&dir.join("config.ini"), "image.sysdir.1") {
@@ -73,6 +71,7 @@ impl Android {
                 .and_then(|m| m.modified())
                 .ok()
                 .map(days_since);
+            let mut lock = running.then(|| "emulator running".to_string());
             let removal = match &avdmanager {
                 Some(bin) => Removal::Command {
                     argv: vec![
@@ -84,18 +83,17 @@ impl Android {
                     ],
                     cwd: None,
                 },
-                None => Removal::Command {
-                    argv: vec![
-                        "rm".into(),
-                        "-rf".into(),
-                        dir.display().to_string(),
-                        self.avd_home
-                            .join(format!("{name}.ini"))
-                            .display()
-                            .to_string(),
-                    ],
-                    cwd: None,
-                },
+                None => {
+                    // Without avdmanager we delete the files ourselves, so the
+                    // folder named by the .ini must be inside the AVD home.
+                    if !within(&dir, &self.avd_home) {
+                        lock.get_or_insert_with(|| "AVD folder outside the AVD home".into());
+                    }
+                    Removal::RemovePaths(vec![
+                        dir.clone(),
+                        self.avd_home.join(format!("{name}.ini")),
+                    ])
+                }
             };
             let item = Item {
                 id: ctx.next_id(),
@@ -104,7 +102,7 @@ impl Android {
                 path: Some(dir.clone()),
                 size: None,
                 status: age.map(Status::LastUsed).into_iter().collect(),
-                lock: running.then(|| "emulator running".to_string()),
+                lock,
                 safe: false,
                 removal,
                 age_days: age,
@@ -132,7 +130,8 @@ impl Android {
                     size: None,
                     status: vec![Status::Orphan],
                     lock: None,
-                    safe: images_safe,
+                    // "Unused" is a guess from config.ini; downloading again costs GBs.
+                    safe: false,
                     removal: Removal::RemoveDir(path),
                     age_days: None,
                     recheck: crate::model::Recheck::default(),
@@ -173,6 +172,14 @@ fn emit(tx: &Sender<ScanEvent>, item: Item) {
     let _ = tx.send(ScanEvent::Found(item));
     if let Some(path) = path {
         size_later(path, id, tx.clone());
+    }
+}
+
+/// `path` is `root` or below it, comparing canonical paths.
+fn within(path: &Path, root: &Path) -> bool {
+    match (std::fs::canonicalize(path), std::fs::canonicalize(root)) {
+        (Ok(path), Ok(root)) => path.starts_with(root),
+        _ => false,
     }
 }
 
@@ -340,27 +347,38 @@ mod tests {
     }
 
     #[test]
-    fn avd_removal_falls_back_to_rm_of_dir_and_ini() {
+    fn avd_removal_falls_back_to_guarded_removal_of_dir_and_ini() {
         let (d, a) = setup();
         let items = scan(&a, "");
         let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
         let avd_home = d.path().join("avd");
         assert_eq!(
             avd.removal,
-            Removal::Command {
-                argv: vec![
-                    "rm".into(),
-                    "-rf".into(),
-                    avd_home.join("Pixel_8_API_34.avd").display().to_string(),
-                    avd_home.join("Pixel_8_API_34.ini").display().to_string(),
-                ],
-                cwd: None,
-            }
+            Removal::RemovePaths(vec![
+                avd_home.join("Pixel_8_API_34.avd"),
+                avd_home.join("Pixel_8_API_34.ini"),
+            ])
         );
     }
 
     #[test]
-    fn orphan_system_image_is_safe() {
+    fn avd_folder_outside_avd_home_is_locked_without_avdmanager() {
+        let (d, a) = setup();
+        let elsewhere = d.path().join("Documents/work");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(
+            a.avd_home.join("Pixel_8_API_34.ini"),
+            format!("path={}\n", elsewhere.display()),
+        )
+        .unwrap();
+        let items = scan(&a, "");
+        let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
+        assert!(avd.lock.is_some());
+        assert!(!avd.selectable());
+    }
+
+    #[test]
+    fn orphan_system_image_is_listed_but_never_safe() {
         let (d, a) = setup();
         let items = scan(&a, "");
         let img = items
@@ -368,7 +386,7 @@ mod tests {
             .find(|i| i.label == "android-30 · default · arm64-v8a")
             .unwrap();
         assert!(img.status.contains(&Status::Orphan));
-        assert!(img.safe);
+        assert!(!img.safe);
         assert_eq!(
             img.removal,
             Removal::RemoveDir(

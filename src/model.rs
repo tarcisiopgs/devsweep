@@ -63,6 +63,9 @@ pub enum Status {
     Merged,
     Clean,
     Dirty(u32),
+    /// Git-ignored files that are not build artifacts (`.env`, local DBs):
+    /// `git worktree remove` deletes them without asking.
+    Ignored(u32),
     Stale(u32),
     Broken,
     Booted,
@@ -79,6 +82,8 @@ pub enum Removal {
     RemoveDir(PathBuf),
     /// Delete the directory contents, keeping the directory.
     ClearDir(PathBuf),
+    /// Delete several folders or files, each one checked by the guard first.
+    RemovePaths(Vec<PathBuf>),
     /// Run a native tool command.
     Command {
         argv: Vec<String>,
@@ -92,6 +97,11 @@ impl Removal {
         match self {
             Removal::RemoveDir(p) => format!("rm -rf {}", quote(&p.to_string_lossy())),
             Removal::ClearDir(p) => format!("rm -rf {}/*", quote(&p.to_string_lossy())),
+            Removal::RemovePaths(paths) => {
+                let paths: Vec<String> =
+                    paths.iter().map(|p| quote(&p.to_string_lossy())).collect();
+                format!("rm -rf {}", paths.join(" "))
+            }
             Removal::Command { argv, cwd } => {
                 let cmd = argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
                 match cwd {
