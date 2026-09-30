@@ -1,0 +1,21 @@
+---
+source: src/ui/list.rs
+assertion_line: 348
+expression: "render(&mockup(), 70, 16).backend()"
+---
+"┌ devsweep ─ /Users/u/Workspace ─────────────────────────────────────┐"
+"│ Artifacts 14.2G │ Worktrees 1.5G │ iOS 19.0G │ Android ⠋  │ Docker │"
+"│────────────────────────────────────────────────────────────────────│"
+"│ Worktrees · 5 items                                     sort: size │"
+"│ ────────────────────────────────────────────────────────────────── │"
+"│ [x] codex/glowz-robots               merged · clean           412M │"
+"│ [x] codex/customer-module            merged · clean           388M │"
+"│ [ ] codex/glowz-dev-deploy           dirty · 3 files          301M │"
+"│ [ ] orca/website/arowana             ⊘ claude · PID 4821      290M │"
+"│ [ ] codex/090b                       clean · stale 41d         95M │"
+"│                                                                    │"
+"│                                                                    │"
+"│                                                                    │"
+"│────────────────────────────────────────────────────────────────────│"
+"│ 3 selected · 9.0 GB   space toggle · tab pane · a all · s sort · / │"
+"└────────────────────────────────────────────────────────────────────┘"

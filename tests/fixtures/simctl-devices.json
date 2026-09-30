@@ -1,0 +1,43 @@
+{
+  "devices": {
+    "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [
+      {
+        "dataPath": "/Users/u/Library/Developer/CoreSimulator/Devices/65C8E6BA-8977-461F-890B-D6973E0063E7/data",
+        "dataPathSize": 5297553408,
+        "logPath": "/Users/u/Library/Logs/CoreSimulator/65C8E6BA-8977-461F-890B-D6973E0063E7",
+        "udid": "65C8E6BA-8977-461F-890B-D6973E0063E7",
+        "lastUsedAt": "2026-09-29T11:06:41Z",
+        "isAvailable": true,
+        "logPathSize": 520192,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro",
+        "state": "Shutdown",
+        "name": "iPhone 18 Pro"
+      },
+      {
+        "dataPath": "/Users/u/Library/Developer/CoreSimulator/Devices/E2F3AAFA-DD28-4F86-A7C9-56EFD1F237FB/data",
+        "dataPathSize": 4867198976,
+        "logPath": "/Users/u/Library/Logs/CoreSimulator/E2F3AAFA-DD28-4F86-A7C9-56EFD1F237FB",
+        "udid": "E2F3AAFA-DD28-4F86-A7C9-56EFD1F237FB",
+        "lastUsedAt": "2026-09-29T13:18:08Z",
+        "isAvailable": true,
+        "logPathSize": 524288,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max",
+        "state": "Booted",
+        "name": "iPhone 18 Pro Max"
+      },
+      {
+        "dataPath": "/Users/u/Library/Developer/CoreSimulator/Devices/D3870107-4043-4799-B534-867CC1E47C59/data",
+        "dataPathSize": 2491867136,
+        "logPath": "/Users/u/Library/Logs/CoreSimulator/D3870107-4043-4799-B534-867CC1E47C59",
+        "udid": "D3870107-4043-4799-B534-867CC1E47C59",
+        "isAvailable": false,
+        "logPathSize": 249856,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17e",
+        "state": "Shutdown",
+        "name": "iPhone 17e",
+        "availabilityError": "runtime profile not found"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.iOS-26-5": []
+  }
+}

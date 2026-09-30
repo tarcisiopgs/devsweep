@@ -1,0 +1,25 @@
+---
+source: src/ui/review.rs
+assertion_line: 203
+expression: render(&reviewing()).backend()
+---
+"┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
+"│ Review · 3 items · 2.1 GB                                                                        │"
+"│                                                                                                  │"
+"│ Worktrees                                                                                        │"
+"│   codex/glowz-robots                                                                        412M │"
+"│     (cd /Users/u/Workspace/glowz) git worktree remove /Users/u/.codex/worktrees/glowz-robots     │"
+"│   codex/old app                                                                              95M │"
+"│     rm -rf '/Users/u/.codex/worktrees/old app'                                                   │"
+"│                                                                                                  │"
+"│ Docker                                                                                           │"
+"│   Dangling images                                                                           1.6G │"
+"│     docker image prune -f                                                                        │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│──────────────────────────────────────────────────────────────────────────────────────────────────│"
+"│ y confirm · ↑↓ scroll · any other key back                                                       │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

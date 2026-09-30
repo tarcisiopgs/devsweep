@@ -1,0 +1,13 @@
+---
+source: src/ui/list.rs
+assertion_line: 353
+expression: "render(&mockup(), 30, 8).backend()"
+---
+"                              "
+"                              "
+"                              "
+"                              "
+"      Terminal too small      "
+"                              "
+"                              "
+"                              "

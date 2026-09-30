@@ -1,0 +1,42 @@
+{
+  "3AF9770B-C2D2-46C2-9F73-D3A6D4E27165": {
+    "build": "23F77",
+    "deletable": true,
+    "identifier": "3AF9770B-C2D2-46C2-9F73-D3A6D4E27165",
+    "kind": "Patchable Cryptex Disk Image",
+    "lastUsedAt": "2026-09-29T11:09:47Z",
+    "mountPath": "/Library/Developer/CoreSimulator/Volumes/iOS_23F77",
+    "parentMountPath": "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime/26c9174130fa5962f3e60f2a49963194dadbae4c.asset/AssetData",
+    "path": "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime/26c9174130fa5962f3e60f2a49963194dadbae4c.asset/AssetData/Restore/094-56039-099.dmg",
+    "platformIdentifier": "com.apple.platform.iphonesimulator",
+    "runtimeBundlePath": "/Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime",
+    "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    "signatureState": "Verified",
+    "sizeBytes": 8494282293,
+    "state": "Ready",
+    "supportedArchitectures": [
+      "arm64"
+    ],
+    "version": "26.5"
+  },
+  "ORPHAN-0000": {
+    "build": "24A434",
+    "deletable": true,
+    "identifier": "D1BC2000-4AC5-4FEE-980F-CD60CFD92889",
+    "kind": "Patchable Cryptex Disk Image",
+    "lastUsedAt": "2026-09-29T13:18:09Z",
+    "mountPath": "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.5LPK2m",
+    "parentMountPath": "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime/3e800c38767f9f2c5fc86acdad7adf44565e051a.asset/AssetData",
+    "path": "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime/3e800c38767f9f2c5fc86acdad7adf44565e051a.asset/AssetData",
+    "platformIdentifier": "com.apple.platform.iphonesimulator",
+    "runtimeBundlePath": "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.5LPK2m/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.0.simruntime",
+    "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-2",
+    "signatureState": "Unknown",
+    "sizeBytes": 8067000161,
+    "state": "Ready",
+    "supportedArchitectures": [
+      "arm64"
+    ],
+    "version": "18.2"
+  }
+}

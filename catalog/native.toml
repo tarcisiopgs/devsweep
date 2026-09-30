@@ -1,0 +1,62 @@
+[[rule]]
+id = "go-mod"
+group = "Go"
+label = "Go module cache"
+paths = ["~/go/pkg/mod"]
+safe = false
+mode = "remove"
+command = ["go", "clean", "-modcache"]
+requires_bin = "go"
+busy_when = ["go"]
+source = "docs: https://go.dev/ref/mod#module-cache"
+
+[[rule]]
+id = "go-build"
+group = "Go"
+label = "Go build cache"
+paths = ["~/Library/Caches/go-build"]
+safe = true
+mode = "clear"
+command = ["go", "clean", "-cache"]
+requires_bin = "go"
+busy_when = ["go"]
+source = "docs: https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching"
+
+[[rule]]
+id = "cargo-registry"
+group = "Rust"
+label = "Cargo registry"
+paths = ["~/.cargo/registry"]
+safe = false
+mode = "remove"
+busy_when = ["cargo"]
+source = "docs: https://doc.rust-lang.org/cargo/guide/cargo-home.html"
+
+[[rule]]
+id = "gem-cache"
+group = "Ruby"
+label = "RubyGems cache"
+paths = ["~/.gem/ruby/*/cache", "~/.gem/specs"]
+safe = false
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "gradle-caches"
+group = "JVM"
+label = "Gradle caches"
+paths = ["~/.gradle/caches"]
+safe = false
+mode = "remove"
+busy_when = ["java", "gradle"]
+source = "docs: https://docs.gradle.org/current/userguide/directory_layout.html"
+
+[[rule]]
+id = "gradle-wrapper"
+group = "JVM"
+label = "Gradle wrapper distributions"
+paths = ["~/.gradle/wrapper/dists"]
+safe = false
+mode = "clear"
+busy_when = ["java", "gradle"]
+source = "docs: https://docs.gradle.org/current/userguide/directory_layout.html"

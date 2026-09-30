@@ -1,0 +1,103 @@
+[[rule]]
+id = "npm-cacache"
+group = "JavaScript"
+label = "npm cache"
+paths = ["~/.npm/_cacache"]
+safe = true
+mode = "clear"
+command = ["npm", "cache", "verify"]
+requires_bin = "npm"
+busy_when = ["npm", "npx"]
+source = "docs: https://docs.npmjs.com/cli/commands/npm-cache"
+
+[[rule]]
+id = "npm-npx"
+group = "JavaScript"
+label = "npx cache"
+paths = ["~/.npm/_npx"]
+safe = true
+mode = "clear"
+busy_when = ["npm", "npx"]
+source = "docs: https://docs.npmjs.com/cli/commands/npx"
+
+[[rule]]
+id = "npm-logs"
+group = "JavaScript"
+label = "npm logs"
+paths = ["~/.npm/_logs"]
+safe = true
+mode = "clear"
+source = "docs: https://docs.npmjs.com/cli/using-npm/logging"
+
+[[rule]]
+id = "pnpm-store"
+group = "JavaScript"
+label = "pnpm store"
+path_cmd = ["pnpm", "store", "path"]
+safe = true
+mode = "clear"
+command = ["pnpm", "store", "prune"]
+requires_bin = "pnpm"
+busy_when = ["pnpm"]
+source = "docs: https://pnpm.io/cli/store"
+
+[[rule]]
+id = "corepack"
+group = "JavaScript"
+label = "Corepack cache"
+paths = ["~/.cache/node/corepack"]
+safe = false
+mode = "clear"
+source = "docs: https://github.com/nodejs/corepack#environment-variables"
+
+[[rule]]
+id = "bun-cache"
+group = "JavaScript"
+label = "bun cache"
+paths = ["~/.bun/install/cache"]
+safe = false
+mode = "clear"
+command = ["bun", "pm", "cache", "rm"]
+requires_bin = "bun"
+busy_when = ["bun"]
+source = "docs: https://bun.sh/docs/install/cache"
+
+[[rule]]
+id = "yarn-cache"
+group = "JavaScript"
+label = "Yarn cache"
+paths = ["~/Library/Caches/Yarn"]
+safe = false
+mode = "clear"
+command = ["yarn", "cache", "clean"]
+requires_bin = "yarn"
+busy_when = ["yarn"]
+source = "docs: https://classic.yarnpkg.com/en/docs/cli/cache"
+
+[[rule]]
+id = "prisma-engines"
+group = "JavaScript"
+label = "Prisma engines"
+paths = ["~/.cache/prisma"]
+safe = false
+mode = "clear"
+source = "observed on disk"
+
+[[rule]]
+id = "playwright"
+group = "JavaScript"
+label = "Playwright browsers"
+paths = ["~/Library/Caches/ms-playwright"]
+safe = false
+mode = "clear"
+source = "docs: https://playwright.dev/docs/browsers#managing-browser-binaries"
+
+[[rule]]
+id = "npm-prebuilds"
+group = "JavaScript"
+label = "npm prebuilt binaries"
+paths = ["~/.npm/_prebuilds"]
+safe = false
+mode = "clear"
+busy_when = ["npm", "npx"]
+source = "observed on disk"

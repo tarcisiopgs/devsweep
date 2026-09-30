@@ -1,0 +1,25 @@
+---
+source: src/ui/list.rs
+assertion_line: 327
+expression: "render(&mockup(), 100, 20).backend()"
+---
+"┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
+"│ THIS FOLDER           │ Worktrees · 5 items                                           sort: size │"
+"│   Artifacts     14.2G │ ──────────────────────────────────────────────────────────────────────── │"
+"│ ▸ Worktrees      1.5G │ [x] codex/glowz-robots                   merged · clean             412M │"
+"│                       │ [x] codex/customer-module                merged · clean             388M │"
+"│ MACHINE               │ [ ] codex/glowz-dev-deploy               dirty · 3 files            301M │"
+"│   iOS           19.0G │ [ ] orca/website/arowana                 ⊘ claude · PID 4821        290M │"
+"│   Android          ⠋  │ [ ] codex/090b                           clean · stale 41d           95M │"
+"│   Docker           ⠋  │                                                                          │"
+"│   Dev caches     8.2G │                                                                          │"
+"│                       │                                                                          │"
+"│                       │                                                                          │"
+"│                       │                                                                          │"
+"│                       │                                                                          │"
+"│                       │                                                                          │"
+"│                       │                                                                          │"
+"│                       │                                                                          │"
+"│──────────────────────────────────────────────────────────────────────────────────────────────────│"
+"│ 3 selected · 9.0 GB   space toggle · tab pane · a all · s sort · / filter · ⏎ review · q quit    │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

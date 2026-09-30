@@ -1,0 +1,19 @@
+{"Images":[
+ {"Containers":"0","ID":"sha256:0744ee5ef89ce6ccfa13de3e579fe6b9e27f93dd70da9c06d2c908b1b193fb8d","Repository":"mysql","Tag":"8.4","Size":"1.12GB","SharedSize":"0B","UniqueSize":"1.116GB"},
+ {"Containers":"0","ID":"sha256:aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777bbbb8888","Repository":"<none>","Tag":"<none>","Size":"250MB","SharedSize":"0B","UniqueSize":"250MB"},
+ {"Containers":"0","ID":"sha256:bbbb1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777bbbb8888","Repository":"<none>","Tag":"<none>","Size":"50MB","SharedSize":"0B","UniqueSize":"50MB"},
+ {"Containers":"1","ID":"sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73","Repository":"postgres","Tag":"17-alpine","Size":"415MB","SharedSize":"13.49MB","UniqueSize":"401.9MB"}
+],
+"Containers":[
+ {"ID":"c1","Image":"postgres:17-alpine","Names":"db","State":"running","Status":"Up 2 hours","Size":"63B"},
+ {"ID":"c2","Image":"redis:7","Names":"old-cache","State":"exited","Status":"Exited (0) 3 weeks ago","Size":"12MB"}
+],
+"Volumes":[
+ {"Labels":"com.docker.volume.anonymous=","Links":"0","Name":"7c07e325aba6bbb560b56cafad3af57089833c7290f2941136fd70f2f086b3f4","Size":"76.67MB"},
+ {"Labels":"","Links":"0","Name":"glowz_pgdata","Size":"1.2GB"},
+ {"Labels":"","Links":"1","Name":"db_data","Size":"300MB"}
+],
+"BuildCache":[
+ {"ID":"x1","Size":"120MB","InUse":"false","Shared":"false"},
+ {"ID":"x2","Size":"30MB","InUse":"false","Shared":"false"}
+]}
