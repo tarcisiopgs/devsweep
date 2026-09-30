@@ -17,3 +17,9 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+
+# publish-npm.yml checks out the repo and publishes through OIDC; a called
+# workflow cannot ask for more than its caller grants.
+[dist.github-custom-job-permissions."publish-npm"]
+contents = "read"
+id-token = "write"
