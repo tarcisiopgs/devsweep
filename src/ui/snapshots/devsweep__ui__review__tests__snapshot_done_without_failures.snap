@@ -1,12 +1,13 @@
 ---
 source: src/ui/review.rs
+assertion_line: 431
 expression: render(&done(false)).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
 "│ ✓ Freed 2.1 GB                                                       disk free 41.0 GB → 43.1 GB │"
 "│                                                                                                  │"
-"│   Worktrees  ███████▍                   507 MB   2 items                                         │"
-"│   Docker     ████████████████████████   1.6 GB   1 item                                          │"
+"│   Worktrees     507 MB   2 items                                                                 │"
+"│   Docker        1.6 GB   1 item                                                                  │"
 "│                                                                                                  │"
 "│ Everything selected was removed.                                                                 │"
 "│                                                                                                  │"
