@@ -100,11 +100,24 @@ pub fn devices_from_json(json: &str, ctx: &ScanCtx) -> anyhow::Result<Vec<Item>>
                 safe: !dev.is_available && lock.is_none(),
                 lock,
                 removal: Removal::Command {
-                    argv: vec!["xcrun".into(), "simctl".into(), "delete".into(), dev.udid],
+                    argv: vec![
+                        "xcrun".into(),
+                        "simctl".into(),
+                        "delete".into(),
+                        dev.udid.clone(),
+                    ],
                     cwd: None,
                 },
                 age_days: last_used,
-                recheck: crate::model::Recheck::default(),
+                recheck: crate::model::Recheck {
+                    probe: Some((
+                        ["xcrun", "simctl", "list", "devices", "booted"]
+                            .map(String::from)
+                            .to_vec(),
+                        dev.udid,
+                    )),
+                    ..Default::default()
+                },
             });
         }
     }
@@ -220,6 +233,32 @@ mod tests {
 
     fn devices() -> Vec<Item> {
         devices_from_json(DEVICES, &ctx()).unwrap()
+    }
+
+    #[test]
+    fn device_is_rechecked_against_booted_simulators() {
+        let d = devices();
+        let dev = d
+            .iter()
+            .find(|i| i.label.starts_with("iPhone 18 Pro ·"))
+            .unwrap();
+        let Removal::Command { argv, .. } = &dev.removal else {
+            panic!("simctl delete expected")
+        };
+        let udid = argv.last().unwrap().clone();
+        assert_eq!(
+            dev.recheck.probe,
+            Some((
+                vec![
+                    "xcrun".into(),
+                    "simctl".into(),
+                    "list".into(),
+                    "devices".into(),
+                    "booted".into()
+                ],
+                udid
+            ))
+        );
     }
 
     #[test]

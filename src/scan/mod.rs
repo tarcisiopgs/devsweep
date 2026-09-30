@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 pub use crossbeam_channel::Sender;
 
@@ -136,32 +137,63 @@ pub fn which(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Like [`run`], in `cwd`, killing the command after `timeout`. Protects the
-/// scan from tools that block (a `git` waiting on a macOS privacy prompt).
-pub fn run_timeout(
+/// Longest a scan-time tool call (docker, simctl, brew…) may take.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Run `argv` in `cwd`, feeding `stdin`, and kill it after `timeout`.
+/// stdin, stdout and stderr each get their own thread, so a chatty command
+/// or a large input can never stall both sides of a pipe.
+pub fn exec(
     argv: &[&str],
     cwd: Option<&std::path::Path>,
-    timeout: std::time::Duration,
-) -> anyhow::Result<String> {
-    use std::io::Read;
+    stdin: Option<Vec<u8>>,
+    timeout: Duration,
+) -> anyhow::Result<std::process::Output> {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
     let (bin, args) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("empty command"))?;
     let mut cmd = Command::new(bin);
     cmd.args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
     let mut child = cmd.spawn()?;
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    // Drain stdout on a thread so a chatty command cannot fill the pipe and stall.
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
+    let writer = match (child.stdin.take(), stdin) {
+        (Some(mut pipe), Some(input)) => Some(std::thread::spawn(move || {
+            let _ = pipe.write_all(&input);
+        })),
+        _ => None,
+    };
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -172,28 +204,42 @@ pub fn run_timeout(
             let _ = child.wait();
             anyhow::bail!("{bin} timed out");
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(20));
     };
-    let out = reader.join().unwrap_or_default();
-    if !status.success() {
-        anyhow::bail!("{bin} failed");
+    if let Some(writer) = writer {
+        let _ = writer.join();
     }
-    Ok(String::from_utf8_lossy(&out).into_owned())
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
 }
 
-/// Run a command and return its stdout; a non-zero exit becomes an error
-/// carrying the first line of stderr.
-pub fn run(argv: &[&str]) -> anyhow::Result<String> {
-    let (bin, args) = argv
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
-    let out = Command::new(bin).args(args).output()?;
+/// Like [`run`], in `cwd`, killing the command after `timeout`. Protects the
+/// scan from tools that block (a `git` waiting on a macOS privacy prompt).
+pub fn run_timeout(
+    argv: &[&str],
+    cwd: Option<&std::path::Path>,
+    timeout: Duration,
+) -> anyhow::Result<String> {
+    let out = exec(argv, cwd, None, timeout)?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let first = stderr.lines().next().unwrap_or("").trim();
-        anyhow::bail!("{} failed: {}", bin, first);
+        let first = stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        anyhow::bail!("{} failed: {}", argv[0], first);
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Run a command and return its stdout, within [`RUN_TIMEOUT`]; a non-zero
+/// exit becomes an error carrying the first line of stderr.
+pub fn run(argv: &[&str]) -> anyhow::Result<String> {
+    run_timeout(argv, None, RUN_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -329,6 +375,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.trim(), "/");
+    }
+
+    #[test]
+    fn exec_feeds_a_large_stdin_without_deadlocking() {
+        // Writing everything before reading stdout used to block both sides.
+        let input = vec![b'x'; 4 * 1024 * 1024];
+        let out = exec(
+            &["cat"],
+            None,
+            Some(input.clone()),
+            std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(out.stdout.len(), input.len());
+    }
+
+    #[test]
+    fn run_timeout_error_carries_the_first_stderr_line() {
+        let err = run_timeout(
+            &["sh", "-c", "echo 'fatal: boom' >&2; exit 3"],
+            None,
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "sh failed: fatal: boom");
     }
 
     #[test]

@@ -218,6 +218,7 @@ impl Scanner for Catalog {
                 recheck: crate::model::Recheck {
                     scope: None,
                     busy: rule.busy_when.clone(),
+                    ..Default::default()
                 },
             };
             let _ = tx.send(ScanEvent::Found(item));

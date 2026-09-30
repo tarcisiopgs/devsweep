@@ -1,17 +1,18 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::Parser;
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, TryRecvError, unbounded};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 
-use devsweep::app::{Action, App};
+use devsweep::app::{Action, App, Screen};
 use devsweep::inuse::InUse;
 use devsweep::model::Item;
-use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_removals};
+use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_removals_until};
 use devsweep::scan::worktrees::AGENT_ROOTS;
 use devsweep::scan::{ScanCtx, ScanEvent, all_scanners, run, spawn_all};
 
@@ -70,7 +71,11 @@ fn start_scan(
     }
 }
 
-fn start_removal(items: Vec<Item>, target: &Path, home: &Path) -> Receiver<RemoveEvent> {
+fn start_removal(
+    items: Vec<Item>,
+    target: &Path,
+    home: &Path,
+) -> (Receiver<RemoveEvent>, Arc<AtomicBool>) {
     let protected = [
         "",
         "Library",
@@ -90,12 +95,13 @@ fn start_removal(items: Vec<Item>, target: &Path, home: &Path) -> Receiver<Remov
         .collect();
     let guard = Guard::new(home.to_path_buf(), target.to_path_buf(), protected, extra);
     let (tx, rx) = unbounded();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
     std::thread::spawn(move || {
-        let inuse = InUse::collect();
-        let recheck = default_recheck(&inuse);
-        run_removals(items, &RealExecutor, &guard, &recheck, tx);
+        let recheck = default_recheck(InUse::collect);
+        run_removals_until(items, &RealExecutor, &guard, &recheck, &stop_flag, tx);
     });
-    rx
+    (rx, stop)
 }
 
 fn run_app(
@@ -106,14 +112,22 @@ fn run_app(
 ) -> anyhow::Result<()> {
     let (app, mut scan_rx) = start_scan(&target, &home, None);
     let mut app = app.expect("fresh app");
-    let mut remove_rx: Option<Receiver<RemoveEvent>> = None;
+    let mut remove_rx: Option<(Receiver<RemoveEvent>, Arc<AtomicBool>)> = None;
 
     loop {
         for ev in scan_rx.try_iter() {
             app.on_scan(ev);
         }
-        if let Some(rx) = &remove_rx {
-            for ev in rx.try_iter() {
+        if let Some((rx, _)) = &remove_rx {
+            let events: Vec<RemoveEvent> = rx.try_iter().collect();
+            // The thread is gone without `Finished` (it panicked).
+            let vanished = events.is_empty()
+                && app.screen == Screen::Removing
+                && matches!(rx.try_recv(), Err(TryRecvError::Disconnected));
+            if vanished {
+                app.removal_aborted();
+            }
+            for ev in events {
                 let finished = matches!(ev, RemoveEvent::Finished);
                 let action = app.on_remove(ev);
                 if finished && notify {
@@ -143,6 +157,11 @@ fn run_app(
             Action::None => {}
             Action::Quit => return Ok(()),
             Action::StartRemoval(items) => remove_rx = Some(start_removal(items, &target, &home)),
+            Action::StopRemoval => {
+                if let Some((_, stop)) = &remove_rx {
+                    stop.store(true, Ordering::SeqCst);
+                }
+            }
             Action::Rescan => {
                 remove_rx = None;
                 scan_rx = start_scan(&target, &home, Some(&mut app)).1;

@@ -1,5 +1,6 @@
 //! Which paths have a live process working inside them, from `lsof`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -12,6 +13,8 @@ struct Proc {
     pid: u32,
     name: String,
     cwd: PathBuf,
+    /// Full command line from `ps`, when known.
+    args: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -45,6 +48,7 @@ impl InUse {
                             pid,
                             name: name.clone(),
                             cwd: PathBuf::from(value),
+                            args: String::new(),
                         });
                     }
                 }
@@ -56,6 +60,29 @@ impl InUse {
             procs,
             ..InUse::default()
         }
+    }
+
+    /// Parse `ps -axo pid=,args=` into command lines by PID.
+    pub fn parse_ps(output: &str) -> HashMap<u32, String> {
+        output
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim_start();
+                let (pid, args) = line.split_once(char::is_whitespace)?;
+                Some((pid.parse().ok()?, args.trim().to_string()))
+            })
+            .collect()
+    }
+
+    /// Attach each process's command line, so tools that run under `node`
+    /// (npm, npx, pnpm) can be recognised by what they run.
+    pub fn with_args(mut self, args: &HashMap<u32, String>) -> InUse {
+        for p in &mut self.procs {
+            if let Some(a) = args.get(&p.pid) {
+                p.args = a.clone();
+            }
+        }
+        self
     }
 
     /// Drop processes that must never lock anything (devsweep itself and the
@@ -101,7 +128,12 @@ impl InUse {
             None,
             LSOF_TIMEOUT,
         );
-        let parsed = InUse::from_output(output).excluding(&own_process_chain());
+        let ps = crate::scan::run_timeout(&["ps", "-axo", "pid=,args="], None, LSOF_TIMEOUT);
+        let parsed = match ps {
+            Ok(ps) => InUse::from_output(output).with_args(&InUse::parse_ps(&ps)),
+            Err(err) => InUse::failed(err.to_string()),
+        };
+        let parsed = parsed.excluding(&own_process_chain());
         match std::env::var_os("HOME") {
             Some(home) => parsed.with_home(home),
             None => parsed,
@@ -130,16 +162,47 @@ impl InUse {
             .map(|p| format!("{} · PID {}", p.name, p.pid))
     }
 
-    /// Lock reason when a process with one of these exact names is running.
+    /// Lock reason when a process with one of these names is running: its
+    /// own name, or the tool it runs (`npm exec …`, `node …/bin/pnpm`).
     pub fn busy(&self, names: &[&str]) -> Option<String> {
+        if let Some(reason) = self.failure() {
+            return Some(reason);
+        }
+        self.procs.iter().find_map(|p| {
+            std::iter::once(p.name.as_str())
+                .chain(arg_names(&p.args))
+                .find(|n| names.contains(n))
+                .map(|n| format!("{n} · PID {}", p.pid))
+        })
+    }
+
+    /// Lock reason when a process command line contains one of `patterns`.
+    pub fn args_containing<S: AsRef<str>>(&self, patterns: &[S]) -> Option<String> {
         if let Some(reason) = self.failure() {
             return Some(reason);
         }
         self.procs
             .iter()
-            .find(|p| names.contains(&p.name.as_str()))
+            .find(|p| patterns.iter().any(|pat| p.args.contains(pat.as_ref())))
             .map(|p| format!("{} · PID {}", p.name, p.pid))
     }
+}
+
+/// Tool names in a command line: the program, and for a script runner
+/// (`node`, `bun`, `deno`) the script it runs, without extension or `-cli`.
+fn arg_names(args: &str) -> impl Iterator<Item = &str> {
+    fn base(t: &str) -> &str {
+        let name = t.rsplit('/').next().unwrap_or(t);
+        let name = name.split('.').next().unwrap_or(name);
+        name.strip_suffix("-cli").unwrap_or(name)
+    }
+    let mut tokens = args.split_whitespace();
+    let first = tokens.next().map(base);
+    let script = match first {
+        Some("node" | "bun" | "deno") => tokens.next().filter(|t| !t.starts_with('-')).map(base),
+        _ => None,
+    };
+    first.into_iter().chain(script)
 }
 
 /// This process and its ancestors (npx, node, the shell…), up to launchd.
@@ -213,6 +276,28 @@ mod tests {
         let iu = InUse::parse("p77\ncpnpm\nn/Users/u/app\n");
         assert_eq!(iu.busy(&["pnpm"]).as_deref(), Some("pnpm · PID 77"));
         assert_eq!(iu.busy(&["pn"]), None);
+    }
+
+    #[test]
+    fn busy_matches_tools_running_under_node_by_their_arguments() {
+        // lsof names these processes `node` or `npm`; ps knows what they run.
+        let iu = InUse::parse("p30\ncnode\nn/Users/u\np31\ncnode\nn/Users/u\n").with_args(
+            &InUse::parse_ps(
+                "   30 npm exec firecrawl-mcp\n   31 node /opt/homebrew/bin/pnpm install\n",
+            ),
+        );
+        assert_eq!(iu.busy(&["npx", "npm"]).as_deref(), Some("npm · PID 30"));
+        assert_eq!(iu.busy(&["pnpm"]).as_deref(), Some("pnpm · PID 31"));
+        assert_eq!(iu.busy(&["yarn"]), None);
+    }
+
+    #[test]
+    fn args_containing_finds_a_running_emulator() {
+        let iu = InUse::parse("p7\ncqemu-system-aarch64\nn/\n").with_args(&InUse::parse_ps(
+            "7 /sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 -avd Pixel_8 -netdelay none\n",
+        ));
+        assert!(iu.args_containing(&["-avd Pixel_8"]).is_some());
+        assert!(iu.args_containing(&["-avd Pixel_9"]).is_none());
     }
 
     #[test]

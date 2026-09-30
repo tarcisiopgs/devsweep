@@ -42,6 +42,8 @@ pub enum Action {
     None,
     Quit,
     StartRemoval(Vec<Item>),
+    /// Skip the items not started yet, then quit.
+    StopRemoval,
     Rescan,
 }
 
@@ -202,10 +204,15 @@ impl App {
                 }
             },
             Screen::Removing => {
-                if ctrl_c || key.code == KeyCode::Char('q') {
+                if ctrl_c && self.quit_after_removal {
+                    // Asked twice: leave now, the running command included.
+                    Action::Quit
+                } else if (ctrl_c || key.code == KeyCode::Char('q')) && !self.quit_after_removal {
                     self.quit_after_removal = true;
+                    Action::StopRemoval
+                } else {
+                    Action::None
                 }
-                Action::None
             }
             Screen::Done => match key.code {
                 _ if ctrl_c => Action::Quit,
@@ -432,6 +439,22 @@ impl App {
             .flat_map(|(_, items)| items)
             .collect();
         (items.len(), items.iter().filter_map(|i| i.size).sum())
+    }
+
+    /// The user asked to quit while items are being removed.
+    pub fn stopping(&self) -> bool {
+        self.quit_after_removal && self.screen == Screen::Removing
+    }
+
+    /// The removal thread ended without `Finished`: what never completed is
+    /// reported as failed instead of spinning forever.
+    pub fn removal_aborted(&mut self) {
+        for p in self.progress.values_mut() {
+            if matches!(p, Progress::Pending | Progress::Running) {
+                *p = Progress::Err("removal stopped unexpectedly".into());
+            }
+        }
+        self.screen = Screen::Done;
     }
 
     pub fn freed_total(&self) -> (usize, u64) {
@@ -821,11 +844,34 @@ mod tests {
         let mut a = app();
         assert_eq!(a.on_key(ch('q')), Action::Quit);
         let mut a = removing();
-        assert_eq!(a.on_key(ch('q')), Action::None);
+        assert_eq!(a.on_key(ch('q')), Action::StopRemoval);
+        assert!(a.stopping());
         assert_eq!(a.on_remove(RemoveEvent::Finished), Action::Quit);
         let mut a = removing();
         a.on_remove(RemoveEvent::Finished);
         assert_eq!(a.on_key(ch('q')), Action::Quit);
+    }
+
+    #[test]
+    fn second_ctrl_c_while_removing_quits_at_once() {
+        let mut a = removing();
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(a.on_key(ctrl_c), Action::StopRemoval);
+        assert_eq!(a.on_key(ctrl_c), Action::Quit);
+    }
+
+    #[test]
+    fn a_removal_that_stops_without_finishing_reports_what_was_left() {
+        let mut a = removing();
+        a.on_remove(RemoveEvent::Started(1));
+        a.on_remove(RemoveEvent::Ok(1, 100));
+        a.on_remove(RemoveEvent::Started(2));
+        a.removal_aborted();
+        assert_eq!(a.screen, Screen::Done);
+        assert_eq!(
+            a.progress.get(&2),
+            Some(&Progress::Err("removal stopped unexpectedly".into()))
+        );
     }
 
     #[test]

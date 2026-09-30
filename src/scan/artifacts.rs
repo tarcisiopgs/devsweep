@@ -1,10 +1,8 @@
 //! Rebuildable project artifacts: `node_modules`, `.venv`, `Pods`, …
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -107,8 +105,14 @@ impl Scanner for Artifacts {
                 })
             });
 
-        for path in git_ignored(ambiguous.into_inner().unwrap()) {
+        let (ignored, unchecked) = git_ignored(ambiguous.into_inner().unwrap());
+        for path in ignored {
             emit(ctx, tx, &path);
+        }
+        if unchecked > 0 {
+            let note =
+                format!("dist/build/out skipped in {unchecked} repositories (git did not answer)");
+            let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
         }
 
         let skipped = skipped.into_inner();
@@ -159,6 +163,7 @@ fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
         recheck: crate::model::Recheck {
             scope: Some(project.clone()),
             busy: vec![],
+            ..Default::default()
         },
     };
     let _ = tx.send(ScanEvent::Found(item));
@@ -194,47 +199,54 @@ fn age_days(artifact: &Path, project: &Path) -> Option<u32> {
     Some(days_since(newest))
 }
 
-/// Keep only the candidates git ignores, asking once per repository.
-fn git_ignored(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
+/// Keep only the candidates git ignores, asking once per repository. The
+/// second value counts the repositories git could not answer for.
+fn git_ignored(candidates: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
     let mut by_repo: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     for path in candidates {
         if let Some(repo) = path.ancestors().skip(1).find(|d| d.join(".git").exists()) {
             by_repo.entry(repo.to_path_buf()).or_default().push(path);
         }
     }
-    by_repo
-        .into_iter()
-        .flat_map(|(repo, paths)| check_ignore(&repo, &paths))
-        .collect()
-}
-
-fn check_ignore(repo: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
-    let child = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["check-ignore", "--stdin", "-z"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else { return vec![] };
-    if let Some(mut stdin) = child.stdin.take() {
-        for p in paths {
-            let _ = stdin.write_all(p.as_os_str().as_encoded_bytes());
-            let _ = stdin.write_all(b"\0");
+    let mut failed = 0;
+    let mut ignored = Vec::new();
+    for (repo, paths) in by_repo {
+        match check_ignore(&repo, &paths) {
+            Ok(found) => ignored.extend(found),
+            Err(_) => failed += 1,
         }
     }
-    let Ok(out) = child.wait_with_output() else {
-        return vec![];
-    };
-    out.stdout
+    (ignored, failed)
+}
+
+/// `git check-ignore` exits 1 when nothing is ignored; anything else that
+/// is not a success is a failure, never "nothing ignored".
+fn check_ignore(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let mut input = Vec::new();
+    for p in paths {
+        input.extend_from_slice(p.as_os_str().as_encoded_bytes());
+        input.push(0);
+    }
+    let repo_arg = repo.to_string_lossy();
+    let out = crate::scan::exec(
+        &["git", "-C", &repo_arg, "check-ignore", "--stdin", "-z"],
+        None,
+        Some(input),
+        crate::scan::RUN_TIMEOUT,
+    )?;
+    match out.status.code() {
+        Some(0) | Some(1) => {}
+        _ => anyhow::bail!("git check-ignore failed in {}", repo.display()),
+    }
+    Ok(out
+        .stdout
         .split(|b| *b == 0)
         .filter(|chunk| !chunk.is_empty())
         .map(|chunk| {
             let p = PathBuf::from(std::ffi::OsStr::from_bytes(chunk));
             if p.is_absolute() { p } else { repo.join(p) }
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -357,6 +369,29 @@ mod tests {
                 .unwrap()
                 .ends_with("code/.hidden-proj/node_modules")
         );
+    }
+
+    #[test]
+    fn check_ignore_answers_for_thousands_of_paths() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        init_repo(&repo);
+        fs::write(repo.join(".gitignore"), "dist\n").unwrap();
+        let paths: Vec<PathBuf> = (0..5000).map(|i| repo.join(format!("p{i}/dist"))).collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(check_ignore(&repo, &paths).map(|v| v.len()));
+        });
+        let found = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("git check-ignore deadlocked");
+        assert_eq!(found.unwrap(), 5000);
+    }
+
+    #[test]
+    fn check_ignore_failure_is_an_error_not_an_empty_answer() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(check_ignore(d.path(), &[d.path().join("dist")]).is_err());
     }
 
     #[test]
