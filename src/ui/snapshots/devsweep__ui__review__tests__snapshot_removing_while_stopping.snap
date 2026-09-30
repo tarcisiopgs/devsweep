@@ -1,10 +1,10 @@
 ---
 source: src/ui/review.rs
-assertion_line: 330
+assertion_line: 409
 expression: render(&a).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
-"│ ⠋ Removing · 0 B freed so far                                                                    │"
+"│ ⠋ Removing · 0 of 3 · 0 B freed so far                                                           │"
 "│                                                                                                  │"
 "│ Worktrees                                                                                        │"
 "│   · codex/glowz-robots                                                                   waiting │"

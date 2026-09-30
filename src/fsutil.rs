@@ -21,6 +21,30 @@ pub fn dir_size(path: &Path) -> u64 {
         .sum()
 }
 
+/// Free bytes on the volume holding `path`, from `df`.
+pub fn disk_free(path: &Path) -> Option<u64> {
+    let path = path.to_str()?;
+    let out = crate::scan::run_timeout(
+        &["df", "-k", "-P", path],
+        None,
+        std::time::Duration::from_secs(5),
+    )
+    .ok()?;
+    parse_df_available(&out)
+}
+
+/// The Available column of `df -k -P`, in bytes.
+pub fn parse_df_available(out: &str) -> Option<u64> {
+    let kb: u64 = out
+        .lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()?;
+    Some(kb * 1024)
+}
+
 /// Whole days elapsed since `t` (0 for times in the future).
 pub fn days_since(t: SystemTime) -> u32 {
     SystemTime::now()
@@ -55,6 +79,14 @@ mod tests {
     #[test]
     fn dir_size_of_missing_path_is_zero() {
         assert_eq!(dir_size(std::path::Path::new("/nonexistent/devsweep")), 0);
+    }
+
+    #[test]
+    fn parses_available_kilobytes_from_df() {
+        let out = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
+                   /dev/disk3s5 971350180 512002080 403110228 56% /System/Volumes/Data\n";
+        assert_eq!(parse_df_available(out), Some(403_110_228 * 1024));
+        assert_eq!(parse_df_available("garbage"), None);
     }
 
     #[test]

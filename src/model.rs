@@ -174,17 +174,7 @@ fn scale(bytes: u64) -> (f64, usize) {
     (value, unit)
 }
 
-/// Short size for list columns: `412M`, `14.2G`, `0B` (base 1000).
-pub fn format_size(bytes: u64) -> String {
-    let (value, unit) = scale(bytes);
-    if unit >= 3 {
-        format!("{:.1}{}", value, UNITS[unit])
-    } else {
-        format!("{}{}", value.round() as u64, UNITS[unit])
-    }
-}
-
-/// Long size for totals: `1.9 GB`, `412 MB`.
+/// The one size notation of the UI: `1.9 GB`, `412 MB`, `0 B` (base 1000).
 pub fn format_size_long(bytes: u64) -> String {
     let (value, unit) = scale(bytes);
     let suffix = if unit == 0 {
@@ -221,17 +211,10 @@ mod tests {
     }
 
     #[test]
-    fn format_size_short() {
-        assert_eq!(format_size(0), "0B");
-        assert_eq!(format_size(999), "999B");
-        assert_eq!(format_size(412_000_000), "412M");
-        assert_eq!(format_size(14_200_000_000), "14.2G");
-        assert_eq!(format_size(1_500), "2K");
-    }
-
-    #[test]
     fn format_size_long_form() {
         assert_eq!(format_size_long(1_900_000_000), "1.9 GB");
+        assert_eq!(format_size_long(412_000_000), "412 MB");
+        assert_eq!(format_size_long(0), "0 B");
     }
 
     #[test]

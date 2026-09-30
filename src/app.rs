@@ -89,6 +89,10 @@ pub struct App {
     pub spinner_tick: u64,
     /// First line shown on the review screen.
     pub review_scroll: usize,
+    /// The key legend overlay is open.
+    pub show_help: bool,
+    /// Free disk space before and after the removal, when `df` answered.
+    pub disk_free: (Option<u64>, Option<u64>),
     quit_after_removal: bool,
 }
 
@@ -114,6 +118,8 @@ impl App {
             removal: Vec::new(),
             spinner_tick: 0,
             review_scroll: 0,
+            show_help: false,
+            disk_free: (None, None),
             quit_after_removal: false,
         }
     }
@@ -174,6 +180,10 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) -> Action {
         let ctrl_c =
             key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.show_help && !ctrl_c {
+            self.show_help = false;
+            return Action::None;
+        }
         let action = match self.screen {
             Screen::List if self.editing_filter => {
                 if ctrl_c {
@@ -231,6 +241,11 @@ impl App {
     fn list_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('r') => {
+                self.reset();
+                return Action::Rescan;
+            }
+            KeyCode::Char('?') => self.show_help = true,
             KeyCode::Up | KeyCode::Char('k') => self.move_cursor(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_cursor(1),
             KeyCode::Tab | KeyCode::BackTab => {
@@ -359,6 +374,7 @@ impl App {
         self.removal.clear();
         self.screen = Screen::List;
         self.cursor_item = 0;
+        self.disk_free = (None, None);
         self.quit_after_removal = false;
     }
 
@@ -464,6 +480,24 @@ impl App {
                 Progress::Ok(bytes) => (n + 1, total + bytes),
                 _ => (n, total),
             })
+    }
+
+    /// Items removed and bytes freed per source, in removal order.
+    pub fn freed_by_source(&self) -> Vec<(SourceId, usize, u64)> {
+        let mut out: Vec<(SourceId, usize, u64)> = Vec::new();
+        for item in &self.removal {
+            let Some(Progress::Ok(bytes)) = self.progress.get(&item.id) else {
+                continue;
+            };
+            match out.iter_mut().find(|(s, _, _)| *s == item.source) {
+                Some((_, n, total)) => {
+                    *n += 1;
+                    *total += bytes;
+                }
+                None => out.push((item.source, 1, *bytes)),
+            }
+        }
+        out
     }
 
     /// One-line result of the removal, used by the native notification.
@@ -823,6 +857,40 @@ mod tests {
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item");
         a.on_remove(RemoveEvent::Err(2, "boom".into()));
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item · 1 failed");
+    }
+
+    #[test]
+    fn r_on_list_rescans() {
+        let mut a = app();
+        assert_eq!(a.on_key(ch('r')), Action::Rescan);
+    }
+
+    #[test]
+    fn question_mark_opens_help_and_the_next_key_only_closes_it() {
+        let mut a = app();
+        a.on_key(ch('?'));
+        assert!(a.show_help);
+        assert_eq!(a.on_key(ch('q')), Action::None);
+        assert!(!a.show_help);
+        assert_eq!(a.on_key(ch('q')), Action::Quit);
+    }
+
+    #[test]
+    fn freed_by_source_sums_successes_in_review_order() {
+        let mut a = removing();
+        a.on_remove(RemoveEvent::Ok(1, 100));
+        a.on_remove(RemoveEvent::Err(2, "boom".into()));
+        a.on_remove(RemoveEvent::Finished);
+        assert_eq!(a.freed_by_source(), vec![(SourceId::Worktrees, 1, 100)]);
+    }
+
+    #[test]
+    fn rescan_forgets_disk_free_readings() {
+        let mut a = removing();
+        a.disk_free = (Some(10), Some(20));
+        a.on_remove(RemoveEvent::Finished);
+        a.on_key(ch('r'));
+        assert_eq!(a.disk_free, (None, None));
     }
 
     #[test]
