@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode…) working in this repository. `CLAUDE.md` imports this file, so this is the single source of instructions.
+Guidance for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode…) working in this repository. This is the single source of instructions.
 
 ## What this is
 

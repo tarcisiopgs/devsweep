@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +22,9 @@ use devsweep::scan::{ScanCtx, ScanEvent, all_scanners, run, spawn_all};
 struct Cli {
     /// Folder to scan for project artifacts and worktrees (defaults to the current directory).
     path: Option<PathBuf>,
+    /// Do not post a macOS notification when a removal finishes.
+    #[arg(long)]
+    no_notify: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -37,7 +41,7 @@ fn main() -> anyhow::Result<()> {
 
     // ratatui::init installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
-    let result = run_app(&mut terminal, target, home);
+    let result = run_app(&mut terminal, target, home, !cli.no_notify);
     ratatui::restore();
     result
 }
@@ -94,7 +98,12 @@ fn start_removal(items: Vec<Item>, target: &Path, home: &Path) -> Receiver<Remov
     rx
 }
 
-fn run_app(terminal: &mut DefaultTerminal, target: PathBuf, home: PathBuf) -> anyhow::Result<()> {
+fn run_app(
+    terminal: &mut DefaultTerminal,
+    target: PathBuf,
+    home: PathBuf,
+    notify: bool,
+) -> anyhow::Result<()> {
     let (app, mut scan_rx) = start_scan(&target, &home, None);
     let mut app = app.expect("fresh app");
     let mut remove_rx: Option<Receiver<RemoveEvent>> = None;
@@ -105,7 +114,15 @@ fn run_app(terminal: &mut DefaultTerminal, target: PathBuf, home: PathBuf) -> an
         }
         if let Some(rx) = &remove_rx {
             for ev in rx.try_iter() {
-                if app.on_remove(ev) == Action::Quit {
+                let finished = matches!(ev, RemoveEvent::Finished);
+                let action = app.on_remove(ev);
+                if finished && notify {
+                    devsweep::notify::post("devsweep", &app.completion_summary());
+                    // The bell marks the terminal tab, too.
+                    let _ = std::io::stdout().write_all(b"\x07");
+                    let _ = std::io::stdout().flush();
+                }
+                if action == Action::Quit {
                     return Ok(());
                 }
             }

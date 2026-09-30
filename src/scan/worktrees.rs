@@ -258,14 +258,19 @@ impl Scanner for Worktrees {
                 if !ctx.seen_worktrees.lock().unwrap().insert(wt.clone()) {
                     continue;
                 }
-                let label = match wt.strip_prefix(&ctx.target) {
-                    Ok(rel) => rel.display().to_string(),
-                    Err(_) => agent_label(&ctx.home, &wt).unwrap_or_else(|| tilde(&ctx.home, &wt)),
+                // Where the worktree lives decides its section: one inside an
+                // agent root is an agent worktree, whatever folder was scanned.
+                let (source, label) = match agent_label(&ctx.home, &wt) {
+                    Some(label) => (SourceId::AgentWorktrees, label),
+                    None => (
+                        SourceId::Worktrees,
+                        match wt.strip_prefix(&ctx.target) {
+                            Ok(rel) => rel.display().to_string(),
+                            Err(_) => tilde(&ctx.home, &wt),
+                        },
+                    ),
                 };
-                emit(
-                    tx,
-                    describe(ctx, SourceId::Worktrees, &wt, Some(&repo), label),
-                );
+                emit(tx, describe(ctx, source, &wt, Some(&repo), label));
             }
         }
         Ok(())
@@ -838,6 +843,47 @@ mod tests {
         assert_eq!(items[0].status, vec![Status::Broken]);
         assert_eq!(items[0].removal, Removal::RemoveDir(wt));
         assert!(!items[0].safe);
+    }
+
+    #[test]
+    fn folder_scan_files_agent_root_worktrees_under_agent_worktrees() {
+        // Scanning $HOME finds the main repo, whose worktrees live in an
+        // agent root: they belong to Agent worktrees, not This folder.
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let r = home.join("r");
+        repo(&r);
+        let orca = home.join("orca/workspaces/site");
+        fs::create_dir_all(&orca).unwrap();
+        let agent_wt = orca.join("arowana");
+        let local_wt = home.join("wt");
+        for wt in [&agent_wt, &local_wt] {
+            git(
+                &r,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "--detach",
+                    wt.to_str().unwrap(),
+                    "main",
+                ],
+            );
+        }
+        let items = run_folder(&ctx(&home, &home, InUse::default()));
+        let agent = items
+            .iter()
+            .find(|i| i.path.as_ref() == Some(&agent_wt))
+            .unwrap();
+        assert_eq!(agent.source, SourceId::AgentWorktrees);
+        assert_eq!(agent.label, "orca/site/arowana");
+        assert!(matches!(&agent.removal, Removal::Command { cwd: Some(c), .. } if *c == r));
+        let local = items
+            .iter()
+            .find(|i| i.path.as_ref() == Some(&local_wt))
+            .unwrap();
+        assert_eq!(local.source, SourceId::Worktrees);
+        assert_eq!(local.label, "wt");
     }
 
     #[test]

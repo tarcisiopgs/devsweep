@@ -41,7 +41,7 @@ create, and lets you act item by item:
 | Source | Section | Preselected when |
 |---|---|---|
 | Project artifacts: `node_modules`, `.venv`, `Pods`, `.next`, `.expo`, `.gradle`, `.cxx`, `target`, `vendor`, `__pycache__`…; `dist`/`build`/`out` only when git ignores them | This folder | never |
-| Git worktrees of the repositories in the folder | This folder | merged, clean and unlocked |
+| Git worktrees of the repositories in the folder, outside the agent folders below | This folder | merged, clean and unlocked |
 | Agent worktrees in `~/.codex/worktrees`, `~/orca/workspaces`, `~/.claude-squad/worktrees` | Machine | merged, clean and unlocked |
 | iOS simulators and runtimes | Machine | the simulator is unavailable |
 | Android AVDs and system images | Machine | the system image is not used by any AVD |
@@ -67,6 +67,9 @@ downloads everything again, so they are listed and left for you to decide.
 | `⏎` | review what will be removed |
 | `y` | confirm on the review screen |
 | `q` | quit |
+
+When a removal finishes, devsweep posts a macOS notification with the result.
+Pass `--no-notify` to turn it off.
 
 ## How it compares
 
