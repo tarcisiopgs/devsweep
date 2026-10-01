@@ -1,0 +1,146 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Dependency updates for devsweep: the Rust crate and the GitHub Actions workflows.",
+    "Renovate merges, not GitHub (platformAutomerge: false). Native auto-merge lands every ready PR at the same instant, and two PRs that both touch Cargo.lock would conflict. Renovate merges one branch per run, always rebased on main."
+  ],
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)"
+  ],
+  "enabledManagers": [
+    "cargo",
+    "github-actions"
+  ],
+  "timezone": "America/Sao_Paulo",
+  "schedule": [
+    "before 9am every weekday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "reviewers": [
+    "tarcisiopgs"
+  ],
+  "assignAutomerge": true,
+  "rebaseWhen": "behind-base-branch",
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "platformAutomerge": false,
+  "automergeStrategy": "squash",
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": false,
+    "schedule": [
+      "before 9am on the first day of the month"
+    ]
+  },
+  "vulnerabilityAlerts": {
+    "labels": [
+      "dependencies",
+      "security"
+    ],
+    "schedule": [
+      "at any time"
+    ],
+    "minimumReleaseAge": null
+  },
+  "packageRules": [
+    {
+      "description": "Non-major dev-dependencies merge on their own: they only run in the test suite, so when they break, they break CI and not the binary users install",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDepTypes": [
+        "dev-dependencies"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "groupName": "dev-dependencies (non-major)",
+      "automerge": true
+    },
+    {
+      "description": "Only patches of runtime crates merge on their own, behind the `check` job (fmt, clippy, the whole suite with its insta snapshots, and the release build for both targets)",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDepTypes": [
+        "dependencies",
+        "build-dependencies"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "groupName": "runtime patches",
+      "automerge": true
+    },
+    {
+      "description": "Runtime minors go into a single PR, for review",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDepTypes": [
+        "dependencies",
+        "build-dependencies"
+      ],
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "groupName": "runtime minor"
+    },
+    {
+      "description": "Cargo treats a 0.x minor as a breaking release (0.29 -> 0.30 is not compatible), but Renovate labels it `minor`. Handle it like a major: its own PR, never merged on its own",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchCurrentVersion": "/^0\\./",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "groupName": null,
+      "automerge": false,
+      "labels": [
+        "dependencies",
+        "major"
+      ]
+    },
+    {
+      "description": "GitHub Actions go into one PR and are never merged on their own: release.yml only runs when a release is published, so a green CI does not prove the release still works",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions",
+      "automerge": false
+    },
+    {
+      "description": "A major never merges on its own, in any manager",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "labels": [
+        "dependencies",
+        "major"
+      ]
+    },
+    {
+      "description": "ratatui drives the terminal through crossterm and only supports specific crossterm versions (0.30 pairs with 0.29). They move together and always with review: the snapshots cover rendering, not the real terminal",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "ratatui",
+        "crossterm"
+      ],
+      "groupName": "ratatui",
+      "automerge": false
+    }
+  ]
+}
