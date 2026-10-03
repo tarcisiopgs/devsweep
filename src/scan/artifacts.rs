@@ -86,6 +86,7 @@ impl Scanner for Artifacts {
 
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
         let skipped = AtomicU64::new(0);
+        let unchecked = AtomicU64::new(0);
         let ambiguous = Mutex::new(Vec::new());
         let builds = Mutex::new(Vec::new());
 
@@ -117,7 +118,16 @@ impl Scanner for Artifacts {
                         return WalkState::Skip;
                     }
                     if classify(path).is_some() {
-                        emit(ctx, tx, path);
+                        // Asked here, not after the walk, so rows keep
+                        // streaming in while the scan runs.
+                        match holds_tracked_files(path) {
+                            Ok(false) => emit(ctx, tx, path),
+                            // Committed on purpose (a versioned `vendor`).
+                            Ok(true) => {}
+                            Err(_) => {
+                                unchecked.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                         return WalkState::Skip;
                     }
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -129,13 +139,24 @@ impl Scanner for Artifacts {
                 })
             });
 
-        let (ignored, unchecked) = git_ignored(ambiguous.into_inner().unwrap());
+        let (ignored, unanswered) = git_ignored(ambiguous.into_inner().unwrap());
         for path in ignored {
-            emit(ctx, tx, &path);
+            match holds_tracked_files(&path) {
+                Ok(false) => emit(ctx, tx, &path),
+                Ok(true) => {}
+                Err(_) => {
+                    unchecked.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
-        if unchecked > 0 {
+        if unanswered > 0 {
             let note =
-                format!("dist/build/out skipped in {unchecked} repositories (git did not answer)");
+                format!("dist/build/out skipped in {unanswered} repositories (git did not answer)");
+            let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
+        }
+        let unchecked = unchecked.into_inner();
+        if unchecked > 0 {
+            let note = format!("{unchecked} artifact folders skipped (git did not answer)");
             let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
         }
 
@@ -276,7 +297,18 @@ fn git_untracked(candidates: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
     (untracked, failed)
 }
 
-/// The paths among `paths` that git tracks in `repo`.
+/// Whether git tracks anything inside `dir`. Such a folder was committed on
+/// purpose, whatever its name, and deleting it would leave the repository
+/// with missing files. A folder outside any repository holds none.
+fn holds_tracked_files(dir: &Path) -> anyhow::Result<bool> {
+    match repo_of(dir) {
+        Some(repo) => Ok(!tracked(repo, &[dir.to_path_buf()])?.is_empty()),
+        None => Ok(false),
+    }
+}
+
+/// The paths among `paths` that git tracks in `repo`; for a folder, every
+/// tracked file inside it.
 fn tracked(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     let repo_arg = repo.to_string_lossy();
     let rel: Vec<String> = paths
@@ -668,5 +700,62 @@ mod tests {
         fs::create_dir_all(d.path().join("a")).unwrap();
         std::os::unix::fs::symlink(o.path().join("real.ipa"), d.path().join("a/link.ipa")).unwrap();
         assert!(items(&scan_with(d.path(), InUse::default())).is_empty());
+    }
+
+    fn commit_all(repo: &Path) {
+        git(repo, &["add", "-A", "-f"]);
+        git(repo, &["commit", "-q", "-m", "x"]);
+    }
+
+    #[test]
+    fn vendor_tracked_by_git_is_not_an_artifact() {
+        // Committed on purpose: deleting it leaves the repository with
+        // hundreds of missing files.
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        init_repo(&repo);
+        fs::create_dir_all(repo.join("webroot")).unwrap();
+        fs::write(repo.join("webroot/composer.json"), "{}").unwrap();
+        mk(&repo, "webroot/vendor/lib");
+        commit_all(&repo);
+        assert!(items(&scan_with(d.path(), InUse::default())).is_empty());
+    }
+
+    #[test]
+    fn unambiguous_folder_tracked_by_git_is_not_an_artifact() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        init_repo(&repo);
+        mk(&repo, "ios/Pods/Lib");
+        commit_all(&repo);
+        mk(&repo, "node_modules/x");
+        let ev = scan_with(d.path(), InUse::default());
+        let found = items(&ev);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].label, "r · node_modules");
+    }
+
+    #[test]
+    fn ignored_folder_holding_a_tracked_file_is_not_an_artifact() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        init_repo(&repo);
+        fs::write(repo.join(".gitignore"), "dist\n").unwrap();
+        mk(&repo, "dist");
+        commit_all(&repo); // `add -f` tracks dist/f despite the ignore rule
+        assert!(items(&scan_with(d.path(), InUse::default())).is_empty());
+    }
+
+    #[test]
+    fn artifact_folders_are_skipped_when_git_does_not_answer() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        fs::create_dir_all(repo.join(".git")).unwrap(); // not a repository
+        mk(&repo, "node_modules/x");
+        let ev = scan_with(d.path(), InUse::default());
+        assert!(items(&ev).is_empty());
+        assert!(ev.iter().any(
+            |e| matches!(e, ScanEvent::Note(_, n) if n == "1 artifact folders skipped (git did not answer)")
+        ));
     }
 }

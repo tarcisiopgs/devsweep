@@ -58,7 +58,8 @@ npm/                 npm shim package and the platform package template
 5. `Guard` limits directory removals to `$HOME`, the scanned folder (unless it is an ancestor of `$HOME`) and explicit extra roots, and refuses the roots and protected folders themselves.
 6. A worktree is `broken` (and removed as a folder) only when its `gitdir:` target no longer exists. When git fails or times out, the worktree is "status unknown", locked, and never removed.
 7. A branch left behind by a removed worktree is offered only when deleting it loses nothing: its tip is in the default branch, or its whole diff landed there as one commit (a verified squash merge). An upstream that is merely gone is never enough, and the default branch is never offered. The branch goes through the review like any item, and the recheck refuses it when it no longer points at the commit that was verified.
-8. Prefer each tool's native removal command (`git worktree remove`, `xcrun simctl delete`, `docker … prune`, `pnpm store prune`, `brew cleanup`) over deleting files behind the tool's back.
+8. A folder holding files git tracks is never an artifact, whatever its name (a committed `vendor` or `Pods`). When git does not answer, the folder is skipped and a note says so.
+9. Prefer each tool's native removal command (`git worktree remove`, `xcrun simctl delete`, `docker … prune`, `pnpm store prune`, `brew cleanup`) over deleting files behind the tool's back.
 
 Any change touching selection, locks, `safe`, the guard or removal needs a test that fails without it.
 

@@ -72,7 +72,7 @@ when access is missing.
 
 | Source | Section | Preselected when |
 |---|---|---|
-| Project artifacts: `node_modules`, `.venv`, `Pods`, `.next`, `.expo`, `.gradle`, `.cxx`, `target`, `vendor`, `__pycache__`…; `dist`/`build`/`out` only when git ignores them; app builds (`.ipa`, `.apk`, `.aab`) that git does not track | This folder | never |
+| Project artifacts: `node_modules`, `.venv`, `Pods`, `.next`, `.expo`, `.gradle`, `.cxx`, `target`, `vendor`, `__pycache__`…; `dist`/`build`/`out` only when git ignores them, and never a folder holding files git tracks; app builds (`.ipa`, `.apk`, `.aab`) that git does not track | This folder | never |
 | Git worktrees of the repositories in the folder, outside the agent folders below | This folder | merged, clean, no ignored files beyond build artifacts, and unlocked |
 | Agent worktrees in `~/.codex/worktrees`, `~/orca/workspaces`, `~/.claude-squad/worktrees` | Machine | merged, clean, no ignored files beyond build artifacts, and unlocked |
 | iOS simulators and runtimes | Machine | the simulator is unavailable |
