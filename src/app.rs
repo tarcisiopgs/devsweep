@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::model::{
     Item, ItemId, LeftoverBranch, Recheck, Removal, SourceId, Status, format_size_long,
 };
-use crate::remove::RemoveEvent;
+use crate::remove::{RemoveError, RemoveEvent};
 use crate::scan::ScanEvent;
 
 /// The terminal app's name from `$TERM_PROGRAM`, for prompts that point
@@ -71,7 +71,7 @@ pub enum Progress {
     Pending,
     Running,
     Ok(u64),
-    Err(String),
+    Err(RemoveError),
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +79,8 @@ pub struct SourceView {
     pub state: SourceState,
     pub items: Vec<Item>,
     pub notes: Vec<String>,
+    /// macOS refused access to what the source reads.
+    pub no_access: bool,
 }
 
 impl SourceView {
@@ -87,6 +89,7 @@ impl SourceView {
             state: SourceState::Scanning,
             items: Vec::new(),
             notes: Vec::new(),
+            no_access: false,
         }
     }
 }
@@ -177,6 +180,7 @@ impl App {
                 }
             }
             ScanEvent::Note(source, note) => self.view(source).notes.push(note),
+            ScanEvent::NoAccess(source) => self.view(source).no_access = true,
             ScanEvent::Failed(source, msg) => self.view(source).state = SourceState::Failed(msg),
             ScanEvent::Done(source) => {
                 let view = self.view(source);
@@ -479,6 +483,7 @@ impl App {
                 state: SourceState::Done,
                 items,
                 notes: Vec::new(),
+                no_access: false,
             },
         );
         self.reviewing_branches = true;
@@ -531,12 +536,7 @@ impl App {
     /// The source failed, or skipped folders, because macOS refused access:
     /// only Full Disk Access for the terminal fixes that.
     pub fn needs_disk_access(&self, source: SourceId) -> bool {
-        let Some(view) = self.sources.get(&source) else {
-            return false;
-        };
-        let denied = |m: &str| m.contains("permission denied") || m.contains("no permission");
-        matches!(&view.state, SourceState::Failed(m) if denied(m))
-            || view.notes.iter().any(|n| denied(n))
+        self.sources.get(&source).is_some_and(|view| view.no_access)
     }
 
     pub fn focused_source(&self) -> Option<SourceId> {
@@ -612,7 +612,7 @@ impl App {
     pub fn removal_aborted(&mut self) {
         for p in self.progress.values_mut() {
             if matches!(p, Progress::Pending | Progress::Running) {
-                *p = Progress::Err("removal stopped unexpectedly".into());
+                *p = Progress::Err(RemoveError::Failed("removal stopped unexpectedly".into()));
             }
         }
         self.screen = Screen::Done;
@@ -991,11 +991,13 @@ mod tests {
         a.on_remove(RemoveEvent::Started(1));
         a.on_remove(RemoveEvent::Ok(1, 100));
         a.on_remove(RemoveEvent::Started(2));
-        a.on_remove(RemoveEvent::Err(2, "boom".into()));
+        a.on_remove(RemoveEvent::Err(2, RemoveError::Failed("boom".into())));
         a.on_remove(RemoveEvent::Finished);
         assert_eq!(a.screen, Screen::Done);
         assert_eq!(a.freed_total(), (1, 100));
-        assert!(matches!(a.progress.get(&2), Some(Progress::Err(m)) if m == "boom"));
+        assert!(
+            matches!(a.progress.get(&2), Some(Progress::Err(RemoveError::Failed(m))) if m == "boom")
+        );
     }
 
     #[test]
@@ -1004,13 +1006,14 @@ mod tests {
         a.on_remove(RemoveEvent::Ok(1, 1_900_000_000));
         a.on_remove(RemoveEvent::Finished);
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item");
-        a.on_remove(RemoveEvent::Err(2, "boom".into()));
+        a.on_remove(RemoveEvent::Err(2, RemoveError::Failed("boom".into())));
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item · 1 failed");
     }
 
     #[test]
     fn o_opens_disk_access_settings_only_for_a_source_blocked_by_permissions() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash, SourceId::Docker]);
+        a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
         a.on_scan(ScanEvent::Failed(
             SourceId::Trash,
             "permission denied reading ~/.Trash".into(),
@@ -1033,12 +1036,14 @@ mod tests {
     }
 
     #[test]
-    fn a_permission_note_also_counts_as_blocked() {
+    fn a_source_is_blocked_by_the_event_not_by_the_wording_of_a_message() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Artifacts]);
         a.on_scan(ScanEvent::Note(
             SourceId::Artifacts,
             "3 folders skipped (no permission)".into(),
         ));
+        assert!(!a.needs_disk_access(SourceId::Artifacts));
+        a.on_scan(ScanEvent::NoAccess(SourceId::Artifacts));
         assert!(a.needs_disk_access(SourceId::Artifacts));
     }
 
@@ -1062,7 +1067,7 @@ mod tests {
     fn freed_by_source_sums_successes_in_review_order() {
         let mut a = removing();
         a.on_remove(RemoveEvent::Ok(1, 100));
-        a.on_remove(RemoveEvent::Err(2, "boom".into()));
+        a.on_remove(RemoveEvent::Err(2, RemoveError::Failed("boom".into())));
         a.on_remove(RemoveEvent::Finished);
         assert_eq!(a.freed_by_source(), vec![(SourceId::Worktrees, 1, 100)]);
     }
@@ -1121,7 +1126,9 @@ mod tests {
         assert_eq!(a.screen, Screen::Done);
         assert_eq!(
             a.progress.get(&2),
-            Some(&Progress::Err("removal stopped unexpectedly".into()))
+            Some(&Progress::Err(RemoveError::Failed(
+                "removal stopped unexpectedly".into()
+            )))
         );
     }
 

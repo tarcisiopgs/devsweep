@@ -174,6 +174,7 @@ impl Scanner for Artifacts {
         if skipped > 0 {
             let note = format!("{skipped} folders skipped (no permission)");
             let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
+            let _ = tx.send(ScanEvent::NoAccess(SourceId::Artifacts));
         }
         Ok(())
     }

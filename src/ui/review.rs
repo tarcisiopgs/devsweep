@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use super::list::{SIZE_W, frame, spinner};
 use crate::app::{App, Progress, Screen};
 use crate::model::{Item, SourceId, format_size_long};
+use crate::remove::RemoveError;
 
 fn dim() -> Style {
     Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
@@ -173,7 +174,7 @@ fn progress_line(app: &App, item: &Item, width: u16) -> Line<'static> {
         ),
         Progress::Err(msg) => (
             Span::styled("  ✗ ", red()),
-            Span::styled(msg.clone(), red()),
+            Span::styled(msg.to_string(), red()),
         ),
     };
     right_aligned(vec![mark, label], right, width)
@@ -313,9 +314,12 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
             format!("✗ {} not removed", failed.len()),
             red().add_modifier(Modifier::BOLD),
         ));
-        let changed = failed
-            .iter()
-            .any(|i| matches!(app.progress.get(&i.id), Some(Progress::Err(m)) if m == "changed since scan"));
+        let changed = failed.iter().any(|i| {
+            matches!(
+                app.progress.get(&i.id),
+                Some(Progress::Err(RemoveError::Changed))
+            )
+        });
         for item in failed {
             lines.push(progress_line(app, item, body.width));
         }
@@ -370,7 +374,7 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
 mod tests {
     use crate::app::App;
     use crate::model::{Item, Removal, SourceId, Status};
-    use crate::remove::RemoveEvent;
+    use crate::remove::{RemoveError, RemoveEvent};
     use crate::scan::ScanEvent;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
@@ -398,14 +402,9 @@ mod tests {
             PathBuf::from("/Users/u/Workspace"),
             vec![SourceId::Worktrees, SourceId::Docker],
         );
-        let wt = Removal::Command {
-            argv: vec![
-                "git".into(),
-                "worktree".into(),
-                "remove".into(),
-                "/Users/u/.codex/worktrees/glowz-robots".into(),
-            ],
-            cwd: Some(PathBuf::from("/Users/u/Workspace/glowz")),
+        let wt = Removal::Worktree {
+            path: PathBuf::from("/Users/u/.codex/worktrees/glowz-robots"),
+            repo: PathBuf::from("/Users/u/Workspace/glowz"),
         };
         let prune = Removal::Command {
             argv: vec!["docker".into(), "image".into(), "prune".into(), "-f".into()],
@@ -458,7 +457,7 @@ mod tests {
         a.on_remove(RemoveEvent::Started(3));
         a.on_remove(RemoveEvent::Ok(3, 1_623_000_000));
         a.on_remove(RemoveEvent::Started(1));
-        a.on_remove(RemoveEvent::Err(1, "changed since scan".into()));
+        a.on_remove(RemoveEvent::Err(1, RemoveError::Changed));
         a.on_remove(RemoveEvent::Started(2));
         insta::assert_snapshot!(render(&a).backend());
     }
@@ -477,7 +476,7 @@ mod tests {
         a.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         a.on_remove(RemoveEvent::Ok(3, 1_623_000_000));
         if fail {
-            a.on_remove(RemoveEvent::Err(1, "changed since scan".into()));
+            a.on_remove(RemoveEvent::Err(1, RemoveError::Changed));
         } else {
             a.on_remove(RemoveEvent::Ok(1, 412_000_000));
         }
@@ -544,7 +543,7 @@ mod tests {
             panic!("no removal");
         };
         a.on_remove(RemoveEvent::Ok(items[0].id, 0));
-        a.on_remove(RemoveEvent::Err(items[1].id, "changed since scan".into()));
+        a.on_remove(RemoveEvent::Err(items[1].id, RemoveError::Changed));
         a.on_remove(RemoveEvent::Finished);
         insta::assert_snapshot!(render(&a).backend());
     }

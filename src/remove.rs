@@ -86,44 +86,63 @@ impl Guard {
         Guard { roots, protected }
     }
 
-    pub fn check(&self, p: &Path) -> Result<(), String> {
+    pub fn check(&self, p: &Path) -> Result<(), RemoveError> {
         if !p.is_absolute() {
-            return Err("refused: relative path".into());
+            return Err(RemoveError::Refused("relative path"));
         }
         // The checks below look at where `p` resolves; the removal then acts
         // through `p`. A symlink would make those two different folders.
         if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err("refused: symlink".into());
+            return Err(RemoveError::Refused("symlink"));
         }
-        let real = std::fs::canonicalize(p).map_err(|_| "changed since scan".to_string())?;
+        let real = std::fs::canonicalize(p).map_err(|_| RemoveError::Changed)?;
         if !self.roots.iter().any(|root| real.starts_with(root)) {
-            return Err("refused: outside allowed folders".into());
+            return Err(RemoveError::Refused("outside allowed folders"));
         }
         if self.roots.contains(&real) || self.protected.contains(&real) {
-            return Err("refused: protected folder".into());
+            return Err(RemoveError::Refused("protected folder"));
         }
         Ok(())
+    }
+}
+
+/// Why an item was left alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoveError {
+    /// It is no longer what the scan saw.
+    Changed,
+    /// The user quit before its turn.
+    Skipped,
+    /// The guard refused the path, for this reason.
+    Refused(&'static str),
+    /// The tool or the filesystem failed, in its own words.
+    Failed(String),
+}
+
+impl std::fmt::Display for RemoveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RemoveError::Changed => f.write_str("changed since scan"),
+            RemoveError::Skipped => f.write_str("skipped: you quit"),
+            RemoveError::Refused(why) => write!(f, "refused: {why}"),
+            RemoveError::Failed(msg) => f.write_str(msg),
+        }
     }
 }
 
 pub enum RemoveEvent {
     Started(ItemId),
     Ok(ItemId, u64),
-    Err(ItemId, String),
+    Err(ItemId, RemoveError),
     /// A worktree just removed left this merged branch in its repository.
     Leftover(LeftoverBranch),
     Finished,
 }
 
-/// The repository and the worktree of a `git worktree remove`.
+/// The repository and the worktree of a worktree removal.
 fn worktree_remove(removal: &Removal) -> Option<(&Path, &Path)> {
     match removal {
-        Removal::Command {
-            argv,
-            cwd: Some(cwd),
-        } if argv.len() == 4 && argv[..3] == ["git", "worktree", "remove"] => {
-            Some((cwd.as_path(), Path::new(&argv[3])))
-        }
+        Removal::Worktree { path, repo } => Some((repo.as_path(), path.as_path())),
         _ => None,
     }
 }
@@ -133,7 +152,7 @@ fn worktree_remove(removal: &Removal) -> Option<(&Path, &Path)> {
 pub type Leftover<'a> = &'a dyn Fn(&Path, &Path) -> Option<LeftoverBranch>;
 
 /// Every path passes the guard before any of them is touched.
-fn remove_paths(paths: &[PathBuf], exec: &dyn Executor, guard: &Guard) -> Result<(), String> {
+fn remove_paths(paths: &[PathBuf], exec: &dyn Executor, guard: &Guard) -> Result<(), RemoveError> {
     paths.iter().try_for_each(|p| guard.check(p))?;
     paths.iter().try_for_each(|p| {
         // symlink_metadata: a symlink is removed as a file, never followed.
@@ -142,6 +161,7 @@ fn remove_paths(paths: &[PathBuf], exec: &dyn Executor, guard: &Guard) -> Result
         } else {
             exec.remove_file(p)
         }
+        .map_err(RemoveError::Failed)
     })
 }
 
@@ -150,7 +170,7 @@ pub fn run_removals(
     items: Vec<Item>,
     exec: &dyn Executor,
     guard: &Guard,
-    recheck: &dyn Fn(&Item) -> Result<(), String>,
+    recheck: &dyn Fn(&Item) -> Result<(), RemoveError>,
     leftover: Leftover,
     tx: Sender<RemoveEvent>,
 ) {
@@ -165,7 +185,7 @@ pub fn run_removals_until(
     items: Vec<Item>,
     exec: &dyn Executor,
     guard: &Guard,
-    recheck: &dyn Fn(&Item) -> Result<(), String>,
+    recheck: &dyn Fn(&Item) -> Result<(), RemoveError>,
     leftover: Leftover,
     stop: &std::sync::atomic::AtomicBool,
     tx: Sender<RemoveEvent>,
@@ -173,7 +193,7 @@ pub fn run_removals_until(
     let mut repos_to_prune = BTreeSet::new();
     for item in &items {
         if stop.load(std::sync::atomic::Ordering::SeqCst) {
-            let _ = tx.send(RemoveEvent::Err(item.id, "skipped: you quit".into()));
+            let _ = tx.send(RemoveEvent::Err(item.id, RemoveError::Skipped));
             continue;
         }
         let _ = tx.send(RemoveEvent::Started(item.id));
@@ -184,10 +204,27 @@ pub fn run_removals_until(
             _ => None,
         };
         let result = checked.and_then(|()| match &item.removal {
-            Removal::RemoveDir(p) => guard.check(p).and_then(|()| exec.remove_dir(p)),
-            Removal::ClearDir(p) => guard.check(p).and_then(|()| exec.clear_dir(p)),
+            Removal::RemoveDir(p) => guard
+                .check(p)
+                .and_then(|()| exec.remove_dir(p).map_err(RemoveError::Failed)),
+            Removal::ClearDir(p) => guard
+                .check(p)
+                .and_then(|()| exec.clear_dir(p).map_err(RemoveError::Failed)),
             Removal::RemovePaths(paths) => remove_paths(paths, exec, guard),
-            Removal::Command { argv, cwd } => exec.command(argv, cwd.as_deref()),
+            Removal::Worktree { path, repo } => exec
+                .command(
+                    &[
+                        "git".into(),
+                        "worktree".into(),
+                        "remove".into(),
+                        path.display().to_string(),
+                    ],
+                    Some(repo),
+                )
+                .map_err(RemoveError::Failed),
+            Removal::Command { argv, cwd } => exec
+                .command(argv, cwd.as_deref())
+                .map_err(RemoveError::Failed),
         });
         match result {
             Ok(()) => {
@@ -218,9 +255,9 @@ const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Re-check an item right before removing it: its folder still exists, no
 /// process moved into it, and a clean worktree is still clean.
-pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result<(), String> {
+pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result<(), RemoveError> {
     move |item: &Item| {
-        let changed = || Err("changed since scan".to_string());
+        let changed = || Err(RemoveError::Changed);
         // A fresh snapshot per item: a long batch must not decide on
         // processes as they were when it started.
         let inuse = snapshot();
@@ -236,7 +273,7 @@ pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result
             match crate::scan::run_timeout(&argv, None, GIT_TIMEOUT) {
                 Ok(out) if out.contains(needle.as_str()) => return changed(),
                 Ok(_) => {}
-                Err(err) => return Err(format!("could not check: {err}")),
+                Err(err) => return Err(RemoveError::Failed(format!("could not check: {err}"))),
             }
         }
         if let Some((argv, value)) = &item.recheck.expect {
@@ -362,7 +399,7 @@ mod tests {
         items: Vec<Item>,
         exec: &Fake,
         g: &Guard,
-        recheck: &dyn Fn(&Item) -> Result<(), String>,
+        recheck: &dyn Fn(&Item) -> Result<(), RemoveError>,
     ) -> Vec<RemoveEvent> {
         let (tx, rx) = crossbeam_channel::unbounded();
         run_removals(items, exec, g, recheck, &|_, _| None, tx);
@@ -370,19 +407,13 @@ mod tests {
     }
 
     fn worktree_item(h: &Path, id: u64, name: &str) -> Item {
-        let argv = vec![
-            "git".into(),
-            "worktree".into(),
-            "remove".into(),
-            h.join(name).display().to_string(),
-        ];
         item(
             id,
             SourceId::Worktrees,
             Some(h.join(name)),
-            Removal::Command {
-                argv,
-                cwd: Some(h.join("r")),
+            Removal::Worktree {
+                path: h.join(name),
+                repo: h.join("r"),
             },
             1,
         )
@@ -440,9 +471,9 @@ mod tests {
             fail_on: Some("worktree remove".into()),
             ..Default::default()
         };
-        let refuse = |_: &Item| Err("changed since scan".to_string());
+        let refuse = |_: &Item| Err(RemoveError::Changed);
         for (exec, recheck) in [
-            (&failing, &ok as &dyn Fn(&Item) -> Result<(), String>),
+            (&failing, &ok as &dyn Fn(&Item) -> Result<(), RemoveError>),
             (&Fake::default(), &refuse),
         ] {
             let (tx, rx) = crossbeam_channel::unbounded();
@@ -493,12 +524,12 @@ mod tests {
         it.recheck.expect = Some((vec!["echo".into(), "abc".into()], "abc".into()));
         assert_eq!(default_recheck(none)(&it), Ok(()));
         it.recheck.expect = Some((vec!["echo".into(), "def".into()], "abc".into()));
-        assert_eq!(default_recheck(none)(&it), Err("changed since scan".into()));
+        assert_eq!(default_recheck(none)(&it), Err(RemoveError::Changed));
         it.recheck.expect = Some((vec!["false".into()], "abc".into()));
-        assert_eq!(default_recheck(none)(&it), Err("changed since scan".into()));
+        assert_eq!(default_recheck(none)(&it), Err(RemoveError::Changed));
     }
 
-    fn ok(_: &Item) -> Result<(), String> {
+    fn ok(_: &Item) -> Result<(), RemoveError> {
         Ok(())
     }
 
@@ -570,7 +601,7 @@ mod tests {
         let g = guard(&h);
         assert_eq!(
             g.check(&h.join("cache/data")),
-            Err("refused: symlink".into())
+            Err(RemoveError::Refused("symlink"))
         );
         let exec = Fake::default();
         let it = item(
@@ -630,7 +661,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, RemoveEvent::Err(2, m) if m == "skipped: you quit"))
+                .any(|e| matches!(e, RemoveEvent::Err(2, RemoveError::Skipped)))
         );
         assert!(matches!(events.last(), Some(RemoveEvent::Finished)));
     }
@@ -693,7 +724,7 @@ mod tests {
         fs::write(wt.join(".env"), "SECRET=1").unwrap();
         assert_eq!(
             default_recheck(|| inuse.clone())(&it),
-            Err("changed since scan".into())
+            Err(RemoveError::Changed)
         );
     }
 
@@ -728,7 +759,7 @@ mod tests {
         let mut b_item = item_in("b");
         b_item.recheck.scope = Some(h.join("b"));
         assert_eq!(recheck(&a), Ok(()));
-        assert_eq!(recheck(&b_item), Err("changed since scan".into()));
+        assert_eq!(recheck(&b_item), Err(RemoveError::Changed));
     }
 
     #[test]
@@ -747,10 +778,7 @@ mod tests {
                 &crate::inuse::InUse::parse_ps("7 qemu-system-aarch64 -avd Pixel_8\n"),
             )
         };
-        assert_eq!(
-            default_recheck(running)(&it),
-            Err("changed since scan".into())
-        );
+        assert_eq!(default_recheck(running)(&it), Err(RemoveError::Changed));
     }
 
     #[test]
@@ -762,7 +790,7 @@ mod tests {
             "ABC-123".into(),
         ));
         let none = crate::inuse::InUse::default;
-        assert_eq!(default_recheck(none)(&it), Err("changed since scan".into()));
+        assert_eq!(default_recheck(none)(&it), Err(RemoveError::Changed));
         it.recheck.probe = Some((
             vec!["echo".into(), "nothing booted".into()],
             "ABC-123".into(),
@@ -792,7 +820,7 @@ mod tests {
             crate::inuse::InUse::parse(&format!("p8\nnode\nn{}\n", h.join("proj/src").display()));
         assert_eq!(
             default_recheck(|| dev_server.clone())(&it),
-            Err("changed since scan".into())
+            Err(RemoveError::Changed)
         );
         let mut cache = item(
             2,
@@ -805,7 +833,7 @@ mod tests {
         let xcode = crate::inuse::InUse::parse("p9\ncXcode\nn/\n");
         assert_eq!(
             default_recheck(|| xcode.clone())(&cache),
-            Err("changed since scan".into())
+            Err(RemoveError::Changed)
         );
     }
 
@@ -840,10 +868,8 @@ mod tests {
             Removal::RemoveDir(h.join("a/node_modules")),
             10,
         );
-        let ev = run(vec![it], &exec, &guard(&h), &|_| {
-            Err("changed since scan".into())
-        });
-        assert!(matches!(&ev[1], RemoveEvent::Err(1, m) if m == "changed since scan"));
+        let ev = run(vec![it], &exec, &guard(&h), &|_| Err(RemoveError::Changed));
+        assert!(matches!(&ev[1], RemoveEvent::Err(1, RemoveError::Changed)));
         assert!(exec.calls.lock().unwrap().is_empty());
     }
 
@@ -918,24 +944,7 @@ mod tests {
         let (_d, h) = home();
         let exec = Fake::default();
         let repo = h.join("r");
-        let wt = |id: u64, name: &str| {
-            let argv = vec![
-                "git".into(),
-                "worktree".into(),
-                "remove".into(),
-                h.join(name).display().to_string(),
-            ];
-            item(
-                id,
-                SourceId::Worktrees,
-                Some(h.join(name)),
-                Removal::Command {
-                    argv,
-                    cwd: Some(repo.clone()),
-                },
-                1,
-            )
-        };
+        let wt = |id: u64, name: &str| worktree_item(&h, id, name);
         run(vec![wt(1, "w1"), wt(2, "w2")], &exec, &guard(&h), &ok);
         let calls = exec.calls.lock().unwrap();
         let prunes = calls
@@ -1010,11 +1019,11 @@ mod tests {
         assert!(default_recheck(crate::inuse::InUse::default)(&present).is_ok());
         assert_eq!(
             default_recheck(crate::inuse::InUse::default)(&missing),
-            Err("changed since scan".into())
+            Err(RemoveError::Changed)
         );
         assert_eq!(
             default_recheck(|| inuse.clone())(&present),
-            Err("changed since scan".into())
+            Err(RemoveError::Changed)
         );
     }
 }

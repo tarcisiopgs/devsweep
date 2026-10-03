@@ -696,6 +696,7 @@ mod tests {
     #[test]
     fn snapshot_failed_source() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Artifacts]);
+        a.on_scan(ScanEvent::NoAccess(SourceId::Artifacts));
         a.on_scan(ScanEvent::Failed(
             SourceId::Artifacts,
             "permission denied".into(),
@@ -708,6 +709,7 @@ mod tests {
     fn snapshot_trash_without_disk_access() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
         a.terminal = "Ghostty".into();
+        a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
         a.on_scan(ScanEvent::Failed(
             SourceId::Trash,
             "permission denied reading ~/.Trash".into(),
@@ -720,6 +722,7 @@ mod tests {
     fn snapshot_trash_after_opening_settings() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
         a.terminal = "Ghostty".into();
+        a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
         a.on_scan(ScanEvent::Failed(
             SourceId::Trash,
             "permission denied reading ~/.Trash".into(),
