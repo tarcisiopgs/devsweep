@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 /// lsof can block on a stale network mount; past this, everything stays locked.
@@ -209,16 +208,13 @@ fn arg_names(args: &str) -> impl Iterator<Item = &str> {
 pub fn own_process_chain() -> Vec<u32> {
     let mut chain = vec![std::process::id()];
     while let Some(&pid) = chain.last() {
-        let parent = Command::new("ps")
-            .args(["-o", "ppid=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .parse::<u32>()
-                    .ok()
-            });
+        let parent = crate::scan::run_timeout(
+            &["ps", "-o", "ppid=", "-p", &pid.to_string()],
+            None,
+            LSOF_TIMEOUT,
+        )
+        .ok()
+        .and_then(|out| out.trim().parse::<u32>().ok());
         match parent {
             Some(ppid) if ppid > 1 && !chain.contains(&ppid) && chain.len() < 32 => {
                 chain.push(ppid)

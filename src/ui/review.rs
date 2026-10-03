@@ -236,6 +236,109 @@ pub fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// What was freed, one row per source. Empty after a branch pass, which
+/// frees no space.
+fn receipt_lines(app: &App) -> Vec<Line<'static>> {
+    if app.branch_pass() {
+        return Vec::new();
+    }
+    let by_source = app.freed_by_source();
+    let label_w = by_source
+        .iter()
+        .map(|(s, _, _)| s.label().chars().count())
+        .max()
+        .unwrap_or(0);
+    by_source
+        .iter()
+        .map(|(source, n, bytes)| {
+            let noun = if *n == 1 { "item" } else { "items" };
+            Line::from(vec![
+                Span::styled(
+                    format!("  {:<label_w$}  ", source.label()),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" {:>SIZE_W$}", format_size_long(*bytes)),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(format!("   {n} {noun}"), dim()),
+            ])
+        })
+        .collect()
+}
+
+/// Whether everything went, or what was left alone, why, and the next step.
+/// `spaced` puts a blank line first, when something is printed above.
+fn outcome_lines(app: &App, width: u16, spaced: bool) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if spaced {
+        lines.push(Line::default());
+    }
+    let failed: Vec<&Item> = app
+        .removal
+        .iter()
+        .filter(|i| matches!(app.progress.get(&i.id), Some(Progress::Err(_))))
+        .collect();
+    if failed.is_empty() {
+        lines.push(Line::styled("Everything selected was removed.", dim()));
+        return lines;
+    }
+    lines.push(Line::styled(
+        format!("✗ {} not removed", failed.len()),
+        red().add_modifier(Modifier::BOLD),
+    ));
+    let changed = failed.iter().any(|i| {
+        matches!(
+            app.progress.get(&i.id),
+            Some(Progress::Err(RemoveError::Changed))
+        )
+    });
+    for item in failed {
+        lines.push(progress_line(app, item, width));
+    }
+    if changed {
+        lines.push(Line::styled(
+            "  Left alone on purpose: they changed after the scan.",
+            dim(),
+        ));
+    }
+    lines.push(Line::styled(
+        if changed {
+            "  Press r to scan again and review them."
+        } else {
+            "  Press r to scan again."
+        },
+        dim(),
+    ));
+    lines
+}
+
+/// The offer to delete the merged branches removed worktrees left behind.
+fn leftover_lines(left: usize) -> Vec<Line<'static>> {
+    if left == 0 {
+        return Vec::new();
+    }
+    vec![
+        Line::default(),
+        Line::styled(
+            if left == 1 {
+                "1 merged branch was left behind by a removed worktree.".to_string()
+            } else {
+                format!("{left} merged branches were left behind by the removed worktrees.")
+            },
+            Style::default().fg(Color::White),
+        ),
+        Line::styled(
+            if left == 1 {
+                "  Press b to review and delete it."
+            } else {
+                "  Press b to review and delete them."
+            },
+            dim(),
+        ),
+    ]
+}
+
 /// The receipt: what was freed per source, the disk before and after, and
 /// what was left alone with the reason and the next step.
 fn draw_done(f: &mut Frame, app: &App, area: Rect) {
@@ -270,94 +373,10 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
         head,
     );
 
-    let by_source = if branch_pass {
-        Vec::new()
-    } else {
-        app.freed_by_source()
-    };
-    let label_w = by_source
-        .iter()
-        .map(|(s, _, _)| s.label().chars().count())
-        .max()
-        .unwrap_or(0);
-    let mut lines = Vec::new();
-    for (source, n, bytes) in &by_source {
-        let noun = if *n == 1 { "item" } else { "items" };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {:<label_w$}  ", source.label()),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(
-                format!(" {:>SIZE_W$}", format_size_long(*bytes)),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(format!("   {n} {noun}"), dim()),
-        ]));
-    }
-
-    let failed: Vec<&Item> = app
-        .removal
-        .iter()
-        .filter(|i| matches!(app.progress.get(&i.id), Some(Progress::Err(_))))
-        .collect();
-    if failed.is_empty() {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.push(Line::styled("Everything selected was removed.", dim()));
-    } else {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.push(Line::styled(
-            format!("✗ {} not removed", failed.len()),
-            red().add_modifier(Modifier::BOLD),
-        ));
-        let changed = failed.iter().any(|i| {
-            matches!(
-                app.progress.get(&i.id),
-                Some(Progress::Err(RemoveError::Changed))
-            )
-        });
-        for item in failed {
-            lines.push(progress_line(app, item, body.width));
-        }
-        if changed {
-            lines.push(Line::styled(
-                "  Left alone on purpose: they changed after the scan.",
-                dim(),
-            ));
-        }
-        lines.push(Line::styled(
-            if changed {
-                "  Press r to scan again and review them."
-            } else {
-                "  Press r to scan again."
-            },
-            dim(),
-        ));
-    }
+    let mut lines = receipt_lines(app);
+    lines.extend(outcome_lines(app, body.width, !lines.is_empty()));
     let left = app.leftovers.len();
-    if left > 0 {
-        lines.push(Line::default());
-        lines.push(Line::styled(
-            if left == 1 {
-                "1 merged branch was left behind by a removed worktree.".to_string()
-            } else {
-                format!("{left} merged branches were left behind by the removed worktrees.")
-            },
-            Style::default().fg(Color::White),
-        ));
-        lines.push(Line::styled(
-            if left == 1 {
-                "  Press b to review and delete it."
-            } else {
-                "  Press b to review and delete them."
-            },
-            dim(),
-        ));
-    }
+    lines.extend(leftover_lines(left));
     f.render_widget(Paragraph::new(lines), body);
     footer(
         f,

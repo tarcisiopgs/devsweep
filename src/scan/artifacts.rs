@@ -4,14 +4,14 @@
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use ignore::WalkState;
 
 use crate::fsutil::days_since;
 use crate::model::{Item, Removal, SourceId, Status};
-use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, size_later};
+use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, lock, size_later};
 
 /// Names that are always a rebuildable artifact.
 const UNAMBIGUOUS: &[&str] = &[
@@ -110,7 +110,7 @@ impl Scanner for Artifacts {
                         if entry.file_type().is_some_and(|t| t.is_file())
                             && app_build(path).is_some()
                         {
-                            builds.lock().unwrap().push(path.to_path_buf());
+                            lock(&builds).push(path.to_path_buf());
                         }
                         return WalkState::Continue;
                     }
@@ -132,14 +132,18 @@ impl Scanner for Artifacts {
                     }
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if AMBIGUOUS.contains(&name) {
-                        ambiguous.lock().unwrap().push(path.to_path_buf());
+                        lock(&ambiguous).push(path.to_path_buf());
                         return WalkState::Skip;
                     }
                     WalkState::Continue
                 })
             });
 
-        let (ignored, unanswered) = git_ignored(ambiguous.into_inner().unwrap());
+        let (ignored, unanswered) = git_ignored(
+            ambiguous
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
         for path in ignored {
             match holds_tracked_files(&path) {
                 Ok(false) => emit(ctx, tx, &path),
@@ -160,7 +164,8 @@ impl Scanner for Artifacts {
             let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
         }
 
-        let (untracked, unchecked) = git_untracked(builds.into_inner().unwrap());
+        let (untracked, unchecked) =
+            git_untracked(builds.into_inner().unwrap_or_else(PoisonError::into_inner));
         for path in untracked {
             emit(ctx, tx, &path);
         }

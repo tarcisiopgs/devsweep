@@ -12,7 +12,7 @@ use ratatui::DefaultTerminal;
 use devsweep::app::{Action, App, Screen, terminal_name};
 use devsweep::fsutil::disk_free;
 use devsweep::inuse::InUse;
-use devsweep::model::Item;
+use devsweep::model::{Item, SourceId};
 use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_removals_until};
 use devsweep::scan::worktrees::{AGENT_ROOTS, leftover_branch};
 use devsweep::scan::{ScanCtx, ScanEvent, all_scanners, run, spawn_all};
@@ -51,12 +51,8 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
-/// Start every available scanner; returns the app state and its event stream.
-fn start_scan(
-    target: &Path,
-    home: &Path,
-    app: Option<&mut App>,
-) -> (Option<App>, Receiver<ScanEvent>) {
+/// Start every available scanner; returns their sources and event stream.
+fn start_scan(target: &Path, home: &Path) -> (Vec<SourceId>, Receiver<ScanEvent>) {
     let scanners: Vec<_> = all_scanners(home)
         .into_iter()
         .filter(|s| s.available())
@@ -69,10 +65,7 @@ fn start_scan(
     ));
     let (tx, rx) = unbounded();
     spawn_all(ctx, scanners, tx);
-    match app {
-        Some(_) => (None, rx),
-        None => (Some(App::new(target.to_path_buf(), sources)), rx),
-    }
+    (sources, rx)
 }
 
 fn start_removal(
@@ -122,8 +115,8 @@ fn run_app(
     home: PathBuf,
     notify: bool,
 ) -> anyhow::Result<()> {
-    let (app, mut scan_rx) = start_scan(&target, &home, None);
-    let mut app = app.expect("fresh app");
+    let (sources, mut scan_rx) = start_scan(&target, &home);
+    let mut app = App::new(target.clone(), sources);
     app.terminal = terminal_name(std::env::var("TERM_PROGRAM").ok().as_deref());
     let mut remove_rx: Option<(Receiver<RemoveEvent>, Arc<AtomicBool>)> = None;
 
@@ -191,7 +184,7 @@ fn run_app(
             }
             Action::Rescan => {
                 remove_rx = None;
-                scan_rx = start_scan(&target, &home, Some(&mut app)).1;
+                scan_rx = start_scan(&target, &home).1;
             }
         }
     }

@@ -2,6 +2,7 @@
 name = "devsweep"
 version = "0.2.5"
 edition = "2024"
+rust-version = "1.88"
 description = "Find and remove what a developer's Mac accumulates: build artifacts, agent worktrees, simulators, emulators, Docker leftovers and dev caches."
 license = "MIT"
 repository = "https://github.com/tarcisiopgs/devsweep"
@@ -25,3 +26,16 @@ toml = "1.1.6"
 [dev-dependencies]
 insta = "1.48.0"
 tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Tests may unwrap (see clippy.toml); production code handles the error.
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

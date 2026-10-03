@@ -79,6 +79,103 @@ fn command(argv: &[&str]) -> Removal {
     }
 }
 
+/// One item per kind of leftover `docker system df` reports.
+fn items(ctx: &ScanCtx, df: &DiskUsage) -> Vec<Item> {
+    let item =
+        |label: String, bytes: u64, status: Vec<Status>, safe: bool, removal: Removal| Item {
+            id: ctx.next_id(),
+            source: SourceId::Docker,
+            label,
+            path: None,
+            size: Some(bytes),
+            status,
+            lock: None,
+            safe,
+            removal,
+            age_days: None,
+            recheck: crate::model::Recheck::default(),
+        };
+    let mut items = Vec::new();
+
+    let unused: Vec<&Image> = df.images.iter().filter(|i| i.containers == "0").collect();
+    let dangling: u64 = unused
+        .iter()
+        .filter(|i| i.repository == "<none>")
+        .map(|i| size(&i.size))
+        .sum();
+    if dangling > 0 {
+        items.push(item(
+            "Dangling images".into(),
+            dangling,
+            vec![],
+            true,
+            command(&["docker", "image", "prune", "-f"]),
+        ));
+    }
+    for img in unused.iter().filter(|i| i.repository != "<none>") {
+        let short = img
+            .id
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(12)
+            .collect::<String>();
+        items.push(item(
+            format!("{}:{}", img.repository, img.tag),
+            size(&img.unique_size),
+            vec![Status::Detail("unused".into())],
+            false,
+            command(&["docker", "rmi", &short]),
+        ));
+    }
+
+    let cache: u64 = df.build_cache.iter().map(|c| size(&c.size)).sum();
+    if cache > 0 {
+        items.push(item(
+            "Build cache".into(),
+            cache,
+            vec![],
+            true,
+            command(&["docker", "builder", "prune", "-f"]),
+        ));
+    }
+
+    let stopped: Vec<&Container> = df
+        .containers
+        .iter()
+        .filter(|c| c.state != "running" && !c.status.starts_with("Up"))
+        .collect();
+    if !stopped.is_empty() {
+        let bytes = stopped.iter().map(|c| size(&c.size)).sum();
+        let detail = Status::Detail(format!("{} containers", stopped.len()));
+        items.push(item(
+            "Stopped containers".into(),
+            bytes,
+            vec![detail],
+            false,
+            command(&["docker", "container", "prune", "-f"]),
+        ));
+    }
+
+    for vol in df.volumes.iter().filter(|v| v.links == "0") {
+        let label = if vol.labels.contains("com.docker.volume.anonymous") {
+            format!(
+                "{} (anonymous)",
+                vol.name.chars().take(12).collect::<String>()
+            )
+        } else {
+            vol.name.clone()
+        };
+        items.push(item(
+            label,
+            size(&vol.size),
+            vec![Status::Orphan],
+            false,
+            command(&["docker", "volume", "rm", &vol.name]),
+        ));
+    }
+    items
+}
+
 pub struct Docker;
 
 impl Docker {
@@ -100,100 +197,7 @@ impl Docker {
             "--format",
             "{{json .}}",
         ])?)?;
-        let item =
-            |label: String, bytes: u64, status: Vec<Status>, safe: bool, removal: Removal| Item {
-                id: ctx.next_id(),
-                source: SourceId::Docker,
-                label,
-                path: None,
-                size: Some(bytes),
-                status,
-                lock: None,
-                safe,
-                removal,
-                age_days: None,
-                recheck: crate::model::Recheck::default(),
-            };
-        let mut items = Vec::new();
-
-        let unused: Vec<&Image> = df.images.iter().filter(|i| i.containers == "0").collect();
-        let dangling: u64 = unused
-            .iter()
-            .filter(|i| i.repository == "<none>")
-            .map(|i| size(&i.size))
-            .sum();
-        if dangling > 0 {
-            items.push(item(
-                "Dangling images".into(),
-                dangling,
-                vec![],
-                true,
-                command(&["docker", "image", "prune", "-f"]),
-            ));
-        }
-        for img in unused.iter().filter(|i| i.repository != "<none>") {
-            let short = img
-                .id
-                .trim_start_matches("sha256:")
-                .chars()
-                .take(12)
-                .collect::<String>();
-            items.push(item(
-                format!("{}:{}", img.repository, img.tag),
-                size(&img.unique_size),
-                vec![Status::Detail("unused".into())],
-                false,
-                command(&["docker", "rmi", &short]),
-            ));
-        }
-
-        let cache: u64 = df.build_cache.iter().map(|c| size(&c.size)).sum();
-        if cache > 0 {
-            items.push(item(
-                "Build cache".into(),
-                cache,
-                vec![],
-                true,
-                command(&["docker", "builder", "prune", "-f"]),
-            ));
-        }
-
-        let stopped: Vec<&Container> = df
-            .containers
-            .iter()
-            .filter(|c| c.state != "running" && !c.status.starts_with("Up"))
-            .collect();
-        if !stopped.is_empty() {
-            let bytes = stopped.iter().map(|c| size(&c.size)).sum();
-            let detail = Status::Detail(format!("{} containers", stopped.len()));
-            items.push(item(
-                "Stopped containers".into(),
-                bytes,
-                vec![detail],
-                false,
-                command(&["docker", "container", "prune", "-f"]),
-            ));
-        }
-
-        for vol in df.volumes.iter().filter(|v| v.links == "0") {
-            let label = if vol.labels.contains("com.docker.volume.anonymous") {
-                format!(
-                    "{} (anonymous)",
-                    vol.name.chars().take(12).collect::<String>()
-                )
-            } else {
-                vol.name.clone()
-            };
-            items.push(item(
-                label,
-                size(&vol.size),
-                vec![Status::Orphan],
-                false,
-                command(&["docker", "volume", "rm", &vol.name]),
-            ));
-        }
-
-        for it in items {
+        for it in items(ctx, &df) {
             let _ = tx.send(ScanEvent::Found(it));
         }
         Ok(())
