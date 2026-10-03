@@ -195,14 +195,9 @@ fn describe(
             recheck: crate::model::Recheck::default(),
         };
     };
-    let removal = Removal::Command {
-        argv: vec![
-            "git".into(),
-            "worktree".into(),
-            "remove".into(),
-            wt.display().to_string(),
-        ],
-        cwd: Some(main.to_path_buf()),
+    let removal = Removal::Worktree {
+        path: wt.to_path_buf(),
+        repo: main.to_path_buf(),
     };
     // A failing or hanging `git status` says nothing about the worktree
     // itself: never call it broken, never preselect it.
@@ -827,14 +822,9 @@ mod tests {
         let items = run_folder(&ctx(&root, &root, InUse::default()));
         assert_eq!(
             items[0].removal,
-            Removal::Command {
-                argv: vec![
-                    "git".into(),
-                    "worktree".into(),
-                    "remove".into(),
-                    wt.display().to_string()
-                ],
-                cwd: Some(root.join("r")),
+            Removal::Worktree {
+                path: wt,
+                repo: root.join("r"),
             }
         );
     }
@@ -857,9 +847,7 @@ mod tests {
         assert!(!items[0].status.contains(&Status::Broken));
         assert!(!items[0].safe);
         assert!(items[0].lock.is_some(), "status unknown must be locked");
-        assert!(
-            matches!(&items[0].removal, Removal::Command { argv, .. } if argv[1] == "worktree")
-        );
+        assert!(matches!(&items[0].removal, Removal::Worktree { .. }));
     }
 
     #[test]
@@ -901,7 +889,7 @@ mod tests {
             "{:?}",
             items[0].status
         );
-        assert!(matches!(&items[0].removal, Removal::Command { cwd: Some(c), .. } if *c == bare));
+        assert!(matches!(&items[0].removal, Removal::Worktree { repo, .. } if *repo == bare));
     }
 
     #[test]
@@ -1003,7 +991,7 @@ mod tests {
             .unwrap();
         assert_eq!(agent.source, SourceId::AgentWorktrees);
         assert_eq!(agent.label, "orca/site/arowana");
-        assert!(matches!(&agent.removal, Removal::Command { cwd: Some(c), .. } if *c == r));
+        assert!(matches!(&agent.removal, Removal::Worktree { repo, .. } if *repo == r));
         let local = items
             .iter()
             .find(|i| i.path.as_ref() == Some(&local_wt))

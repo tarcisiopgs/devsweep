@@ -92,6 +92,8 @@ pub enum Removal {
     ClearDir(PathBuf),
     /// Delete several folders or files, each one checked by the guard first.
     RemovePaths(Vec<PathBuf>),
+    /// `git worktree remove`, run in the repository that owns the worktree.
+    Worktree { path: PathBuf, repo: PathBuf },
     /// Run a native tool command.
     Command {
         argv: Vec<String>,
@@ -110,6 +112,11 @@ impl Removal {
                     paths.iter().map(|p| quote(&p.to_string_lossy())).collect();
                 format!("rm -rf {}", paths.join(" "))
             }
+            Removal::Worktree { path, repo } => format!(
+                "(cd {}) git worktree remove {}",
+                quote(&repo.to_string_lossy()),
+                quote(&path.to_string_lossy())
+            ),
             Removal::Command { argv, cwd } => {
                 let cmd = argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
                 match cwd {

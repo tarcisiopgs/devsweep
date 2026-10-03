@@ -30,6 +30,9 @@ pub enum ScanEvent {
     Found(Item),
     Size(ItemId, u64),
     Note(SourceId, String),
+    /// macOS refused access to what the source reads; only Full Disk Access
+    /// for the terminal fixes that.
+    NoAccess(SourceId),
     Done(SourceId),
     Failed(SourceId, String),
 }

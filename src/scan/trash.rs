@@ -56,6 +56,7 @@ impl Scanner for Trash {
         let mut count = match entries(home_trash) {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                let _ = tx.send(ScanEvent::NoAccess(SourceId::Trash));
                 anyhow::bail!("permission denied reading ~/.Trash")
             }
             Err(e) => return Err(e.into()),
@@ -177,5 +178,33 @@ mod tests {
         fs::set_permissions(&trash, fs::Permissions::from_mode(0o755)).unwrap();
         let err = result.unwrap_err().to_string();
         assert!(err.contains("permission denied"), "{err}");
+    }
+
+    #[test]
+    fn unreadable_trash_reports_no_access() {
+        // The Full Disk Access prompt hangs on this event, not on the wording
+        // of the error.
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let trash = d.path().join(".Trash");
+        fs::create_dir_all(&trash).unwrap();
+        fs::set_permissions(&trash, fs::Permissions::from_mode(0o000)).unwrap();
+        let ctx = ScanCtx::new(
+            d.path().to_path_buf(),
+            d.path().to_path_buf(),
+            InUse::default(),
+        );
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let result = Trash {
+            roots: vec![trash.clone()],
+        }
+        .scan(&ctx, &tx);
+        fs::set_permissions(&trash, fs::Permissions::from_mode(0o755)).unwrap();
+        drop(tx);
+        assert!(result.is_err());
+        assert!(
+            rx.iter()
+                .any(|e| matches!(e, ScanEvent::NoAccess(SourceId::Trash)))
+        );
     }
 }
