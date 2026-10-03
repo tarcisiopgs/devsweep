@@ -57,6 +57,17 @@ jobs:
           key: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
 
+  # Not part of `check`: a new advisory must not block unrelated pull requests.
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
   # `check` is the required status check on main; it passes only when every job above passes.
   check:
     name: check

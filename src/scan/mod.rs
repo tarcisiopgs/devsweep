@@ -15,7 +15,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 pub use crossbeam_channel::Sender;
@@ -24,8 +24,10 @@ use crate::fsutil::dir_size;
 use crate::inuse::InUse;
 use crate::model::{Item, ItemId, SourceId};
 
-// Found dominates the traffic anyway; boxing it would only add an allocation.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Found dominates the traffic anyway; boxing it would only add an allocation"
+)]
 pub enum ScanEvent {
     Found(Item),
     Size(ItemId, u64),
@@ -35,6 +37,13 @@ pub enum ScanEvent {
     NoAccess(SourceId),
     Done(SourceId),
     Failed(SourceId, String),
+}
+
+/// Lock a mutex even after a scanner thread panicked while holding it. What
+/// these mutexes guard is a plain collection or flag, still good to read,
+/// and one failed scanner must not take the others down with it.
+pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub struct ScanCtx {
@@ -61,17 +70,17 @@ impl ScanCtx {
 
     /// Signal that the folder worktree scan finished (or never runs).
     pub fn mark_worktrees_done(&self) {
-        let (lock, cvar) = &self.worktrees_done;
-        *lock.lock().unwrap() = true;
+        let (flag, cvar) = &self.worktrees_done;
+        *lock(flag) = true;
         cvar.notify_all();
     }
 
     /// Block until the folder worktree scan finished.
     pub fn wait_worktrees_done(&self) {
-        let (lock, cvar) = &self.worktrees_done;
-        let mut done = lock.lock().unwrap();
+        let (flag, cvar) = &self.worktrees_done;
+        let mut done = lock(flag);
         while !*done {
-            done = cvar.wait(done).unwrap();
+            done = cvar.wait(done).unwrap_or_else(PoisonError::into_inner);
         }
     }
 

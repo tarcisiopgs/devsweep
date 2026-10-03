@@ -279,34 +279,28 @@ fn heading(app: &App, source: SourceId, shown: usize) -> String {
     }
 }
 
-fn draw_items(f: &mut Frame, app: &App, area: Rect) {
-    let Some(source) = app.focused_source() else {
-        return;
-    };
-    let view = &app.sources[&source];
-    let items = app.visible_items();
-    let focused = app.focus == Focus::Items;
-    let area = Rect {
-        x: area.x + 1,
-        width: area.width.saturating_sub(2),
-        ..area
-    };
-
+/// Heading row and rule of the item pane.
+fn pane_header(
+    app: &App,
+    source: SourceId,
+    shown: usize,
+    width: usize,
+    focused: bool,
+) -> Vec<Line<'static>> {
     let sort = match app.sort {
         SortBy::Size => "size",
         SortBy::Name => "name",
         SortBy::Age => "age",
     };
-    let count = heading(app, source, items.len());
+    let count = heading(app, source, shown);
     let filter = match (&app.filter, app.editing_filter) {
         (Some(f), true) => format!("  / {f}▏"),
         (Some(f), false) => format!("  / {f}"),
         _ => String::new(),
     };
     let right = format!("sort: {sort}");
-    let pad = (area.width as usize)
-        .saturating_sub(count.chars().count() + filter.chars().count() + right.len());
-    let mut lines = vec![
+    let pad = width.saturating_sub(count.chars().count() + filter.chars().count() + right.len());
+    vec![
         Line::from(vec![
             Span::styled(
                 count,
@@ -320,8 +314,15 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" ".repeat(pad)),
             Span::styled(right, dim()),
         ]),
-        Line::styled("─".repeat(area.width as usize), dim()),
-    ];
+        Line::styled("─".repeat(width), dim()),
+    ]
+}
+
+/// What the pane says besides its rows: a failure, the scanner's notes, the
+/// Full Disk Access prompt, or why the list is empty.
+fn pane_messages(app: &App, source: SourceId, empty: bool) -> Vec<Line<'static>> {
+    let view = &app.sources[&source];
+    let mut lines = Vec::new();
     let blocked = app.needs_disk_access(source);
     match &view.state {
         SourceState::Failed(_) if blocked => {}
@@ -346,7 +347,7 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
     }
     // A failure or a note already says why the list is empty.
     let explained = matches!(view.state, SourceState::Failed(_)) || !view.notes.is_empty();
-    if items.is_empty() && !explained {
+    if empty && !explained {
         let msg = match (&view.state, source.section(), &app.filter) {
             (SourceState::Scanning, _, _) => "Rows appear here as they are found.".to_string(),
             (_, _, Some(f)) if !f.is_empty() => format!("Nothing matches \"{f}\"."),
@@ -355,55 +356,84 @@ fn draw_items(f: &mut Frame, app: &App, area: Rect) {
         };
         lines.push(Line::styled(msg, dim()));
     }
+    lines
+}
+
+/// One item: checkbox, label, status and size.
+fn item_row(
+    app: &App,
+    item: &Item,
+    is_cursor: bool,
+    status_w: usize,
+    label_w: usize,
+) -> Line<'static> {
+    let selected = app.selected.contains(&item.id);
+    let locked = item.lock.is_some();
+    let check = if locked {
+        Span::styled(" ⊘  ", dim())
+    } else if selected {
+        Span::styled("[x] ", Style::default().fg(Color::Green))
+    } else {
+        Span::styled("[ ] ", dim())
+    };
+    let label_style = if is_cursor {
+        yellow().add_modifier(Modifier::BOLD)
+    } else if locked {
+        dim()
+    } else {
+        white()
+    };
+    let mut status = status_spans(item);
+    let status_len: usize = status.iter().map(|s| s.width()).sum();
+    if status_len > status_w {
+        let text: String = status.iter().map(|s| s.content.to_string()).collect();
+        let style = status.first().map(|s| s.style).unwrap_or_default();
+        status = vec![Span::styled(truncate(&text, status_w), style)];
+    } else {
+        status.push(Span::raw(" ".repeat(status_w - status_len)));
+    }
+    let size = item
+        .size
+        .map(format_size_long)
+        .unwrap_or_else(|| "…".into());
+    let value_style = if locked { dim() } else { white() };
+    let mut spans = vec![
+        check,
+        Span::styled(truncate(&item.label, label_w), label_style),
+        Span::raw("  "),
+    ];
+    spans.extend(status);
+    spans.push(Span::styled(format!(" {size:>SIZE_W$}"), value_style));
+    let line = Line::from(spans);
+    if locked {
+        line.patch_style(Style::default().add_modifier(Modifier::DIM))
+    } else {
+        line
+    }
+}
+
+fn draw_items(f: &mut Frame, app: &App, area: Rect) {
+    let Some(source) = app.focused_source() else {
+        return;
+    };
+    let items = app.visible_items();
+    let focused = app.focus == Focus::Items;
+    let area = Rect {
+        x: area.x + 1,
+        width: area.width.saturating_sub(2),
+        ..area
+    };
+    let width = area.width as usize;
+    let mut lines = pane_header(app, source, items.len(), width, focused);
+    lines.extend(pane_messages(app, source, items.is_empty()));
 
     let rows = (area.height as usize).saturating_sub(lines.len());
     let offset = app.cursor_item.saturating_sub(rows.saturating_sub(1));
-    let status_w = ((area.width as usize) / 3).min(30);
-    let label_w = (area.width as usize).saturating_sub(4 + 2 + status_w + 1 + SIZE_W);
+    let status_w = (width / 3).min(30);
+    let label_w = width.saturating_sub(4 + 2 + status_w + 1 + SIZE_W);
     for (i, item) in items.iter().enumerate().skip(offset).take(rows) {
         let is_cursor = focused && i == app.cursor_item;
-        let selected = app.selected.contains(&item.id);
-        let locked = item.lock.is_some();
-        let check = if locked {
-            Span::styled(" ⊘  ", dim())
-        } else if selected {
-            Span::styled("[x] ", Style::default().fg(Color::Green))
-        } else {
-            Span::styled("[ ] ", dim())
-        };
-        let label_style = if is_cursor {
-            yellow().add_modifier(Modifier::BOLD)
-        } else if locked {
-            dim()
-        } else {
-            white()
-        };
-        let mut status = status_spans(item);
-        let status_len: usize = status.iter().map(|s| s.width()).sum();
-        if status_len > status_w {
-            let text: String = status.iter().map(|s| s.content.to_string()).collect();
-            let style = status.first().map(|s| s.style).unwrap_or_default();
-            status = vec![Span::styled(truncate(&text, status_w), style)];
-        } else {
-            status.push(Span::raw(" ".repeat(status_w - status_len)));
-        }
-        let size = item
-            .size
-            .map(format_size_long)
-            .unwrap_or_else(|| "…".into());
-        let value_style = if locked { dim() } else { white() };
-        let mut spans = vec![
-            check,
-            Span::styled(truncate(&item.label, label_w), label_style),
-            Span::raw("  "),
-        ];
-        spans.extend(status);
-        spans.push(Span::styled(format!(" {size:>SIZE_W$}"), value_style));
-        let mut line = Line::from(spans);
-        if locked {
-            line = line.patch_style(Style::default().add_modifier(Modifier::DIM));
-        }
-        lines.push(line);
+        lines.push(item_row(app, item, is_cursor, status_w, label_w));
     }
     f.render_widget(Paragraph::new(lines), area);
 }

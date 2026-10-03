@@ -1,14 +1,14 @@
 //! Git worktrees, both under the scanned folder and in coding-agent roots.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use ignore::WalkState;
 
 use crate::model::{Item, LeftoverBranch, Removal, SourceId, Status};
 use crate::scan::artifacts::classify;
-use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, run_timeout, size_later};
+use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, lock, run_timeout, size_later};
 
 /// A worktree is stale once its HEAD commit is this old.
 pub const STALE_DAYS: u32 = 14;
@@ -327,7 +327,7 @@ impl Scanner for Worktrees {
                     continue;
                 }
                 let wt = std::fs::canonicalize(&entry.path).unwrap_or(entry.path);
-                if !ctx.seen_worktrees.lock().unwrap().insert(wt.clone()) {
+                if !lock(&ctx.seen_worktrees).insert(wt.clone()) {
                     continue;
                 }
                 // Where the worktree lives decides its section: one inside an
@@ -375,13 +375,13 @@ fn find_repos(ctx: &ScanCtx) -> Vec<PathBuf> {
                     return WalkState::Skip;
                 }
                 if path.join(".git").is_dir() {
-                    repos.lock().unwrap().push(path.to_path_buf());
+                    lock(&repos).push(path.to_path_buf());
                     return WalkState::Skip;
                 }
                 WalkState::Continue
             })
         });
-    let mut repos = repos.into_inner().unwrap();
+    let mut repos = repos.into_inner().unwrap_or_else(PoisonError::into_inner);
     repos.sort();
     repos
 }
@@ -413,7 +413,7 @@ impl Scanner for AgentWorktrees {
         for root in self.roots.iter().filter(|r| r.is_dir()) {
             let root = std::fs::canonicalize(root).unwrap_or(root.clone());
             for wt in find_worktree_dirs(&root, 3) {
-                if ctx.seen_worktrees.lock().unwrap().contains(&wt) {
+                if lock(&ctx.seen_worktrees).contains(&wt) {
                     continue;
                 }
                 let main = match main_repo(&wt) {
