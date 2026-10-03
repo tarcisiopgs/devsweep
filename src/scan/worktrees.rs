@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use ignore::WalkState;
 
-use crate::model::{Item, Removal, SourceId, Status};
+use crate::model::{Item, LeftoverBranch, Removal, SourceId, Status};
 use crate::scan::artifacts::classify;
 use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, run_timeout, size_later};
 
@@ -110,6 +110,64 @@ fn is_merged(main: &Path, head: &str, branch: Option<&str>) -> bool {
         .as_deref()
             == Some("[gone]")
     })
+}
+
+/// The branch that removing the worktree `wt` leaves behind in `repo`, when
+/// deleting it loses nothing: its tip is already in the default branch, or
+/// its whole diff landed there as a single commit (a squash merge). A branch
+/// whose upstream is merely gone is not enough. Asked before the removal,
+/// while the worktree can still say which branch it holds.
+pub fn leftover_branch(wt: &Path, repo: &Path) -> Option<LeftoverBranch> {
+    let branch = git(wt, &["symbolic-ref", "-q", "--short", "HEAD"]).filter(|b| !b.is_empty())?;
+    let head = git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{branch}"),
+        ],
+    )?;
+    let default = default_branch(repo)?;
+    let default_name = default.strip_prefix("origin/").unwrap_or(&default);
+    if branch == default_name || branch == "main" || branch == "master" {
+        return None;
+    }
+    let merged = git_ok(repo, &["merge-base", "--is-ancestor", &head, &default])
+        || squash_merged(repo, &head, &default);
+    merged.then(|| LeftoverBranch {
+        repo: repo.to_path_buf(),
+        branch,
+        head,
+    })
+}
+
+/// Whether the default branch has one commit carrying the whole diff of
+/// `head`. The branch is squashed into a throwaway commit on its merge base
+/// and `git cherry` looks for the same patch; that commit is unreachable and
+/// goes with the next `git gc`.
+fn squash_merged(repo: &Path, head: &str, default: &str) -> bool {
+    let Some(base) = git(repo, &["merge-base", default, head]) else {
+        return false;
+    };
+    let Some(squashed) = git(
+        repo,
+        &[
+            "-c",
+            "user.name=devsweep",
+            "-c",
+            "user.email=devsweep@localhost",
+            "commit-tree",
+            &format!("{head}^{{tree}}"),
+            "-p",
+            &base,
+            "-m",
+            "devsweep: squash check",
+        ],
+    ) else {
+        return false;
+    };
+    git(repo, &["cherry", default, &squashed]).is_some_and(|out| out.starts_with('-'))
 }
 
 /// Build the item for one worktree. `main` is `None` when the main
@@ -519,7 +577,7 @@ fn find_worktree_dirs(root: &Path, depth: usize) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use crate::inuse::InUse;
-    use crate::model::{Removal, Status};
+    use crate::model::{LeftoverBranch, Removal, Status};
     use std::fs;
     use std::path::Path;
     use std::process::Command;
@@ -1032,5 +1090,111 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "orca/site/arowana");
         assert_eq!(items[0].source, SourceId::AgentWorktrees);
+    }
+
+    fn rev(dir: &Path, name: &str) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", name])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Land `feat` on `main` as a single commit, the way a squash merge does.
+    fn squash_merge(r: &Path) {
+        git(r, &["merge", "-q", "--squash", "feat"]);
+        git(r, &["commit", "-q", "-m", "feat (squashed)"]);
+    }
+
+    #[test]
+    fn branch_merged_into_the_default_branch_is_a_leftover() {
+        let (_d, root, wt) = setup(true);
+        let r = root.join("r");
+        assert_eq!(
+            leftover_branch(&wt, &r),
+            Some(LeftoverBranch {
+                repo: r.clone(),
+                branch: "feat".into(),
+                head: rev(&r, "feat"),
+            })
+        );
+    }
+
+    #[test]
+    fn unmerged_branch_is_never_a_leftover() {
+        let (_d, root, wt) = setup(false);
+        assert_eq!(leftover_branch(&wt, &root.join("r")), None);
+    }
+
+    #[test]
+    fn squash_merged_branch_is_a_leftover() {
+        let (_d, root, wt) = setup(false);
+        let r = root.join("r");
+        squash_merge(&r);
+        assert_eq!(
+            leftover_branch(&wt, &r).map(|b| b.branch),
+            Some("feat".into())
+        );
+    }
+
+    #[test]
+    fn squash_merged_branch_with_newer_commits_is_not_a_leftover() {
+        // Work added after the squash merge exists nowhere else.
+        let (_d, root, wt) = setup(false);
+        let r = root.join("r");
+        squash_merge(&r);
+        fs::write(wt.join("later.txt"), "later").unwrap();
+        git(&wt, &["add", "."]);
+        git(&wt, &["commit", "-q", "-m", "later"]);
+        assert_eq!(leftover_branch(&wt, &r), None);
+    }
+
+    #[test]
+    fn detached_worktree_leaves_no_branch_behind() {
+        let d = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let r = root.join("r");
+        repo(&r);
+        let wt = root.join("wt");
+        git(
+            &r,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                wt.to_str().unwrap(),
+                "main",
+            ],
+        );
+        assert_eq!(leftover_branch(&wt, &r), None);
+    }
+
+    #[test]
+    fn the_default_branch_is_never_a_leftover() {
+        // A bare repository keeps `main` in a worktree like any other branch.
+        let d = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let r = root.join("r");
+        repo(&r);
+        let bare = root.join("bare.git");
+        git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                r.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let wt = root.join("wt");
+        git(
+            &bare,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "main"],
+        );
+        assert_eq!(leftover_branch(&wt, &bare), None);
     }
 }
