@@ -40,6 +40,8 @@ or build from source with `cargo build --release`.
    items so they cannot be selected.
 3. **Review.** Press `enter` to see the selection, total size and removal commands.
    Press `esc` to go back or `y` to confirm. Each item is checked again before removal.
+4. **Follow up.** The receipt shows what was freed and what was left alone. When
+   removed worktrees leave merged branches behind, press `b` to review and delete them.
 
 ## Know what you are removing
 

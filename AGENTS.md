@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode�
 
 ## What this is
 
-devsweep is a Rust + ratatui terminal UI for macOS that finds what a developer's Mac accumulates and removes what the user picks: project build artifacts, git worktrees (including the ones coding agents leave behind), iOS simulators and runtimes, Android AVDs and system images, Docker leftovers, dev tool caches, Xcode data and Homebrew cleanup.
+devsweep is a Rust + ratatui terminal UI for macOS that finds what a developer's Mac accumulates and removes what the user picks: project build artifacts and app builds (`.ipa`, `.apk`, `.aab`), git worktrees (including the ones coding agents leave behind) and the merged branches they leave in the repository, iOS simulators and runtimes, Android AVDs and system images, Docker leftovers, dev tool caches, Xcode data and Homebrew cleanup.
 
 It deletes user data. **Correctness of what can be selected and removed outranks every other concern**, including speed and features.
 
@@ -52,12 +52,13 @@ npm/                 npm shim package and the platform package template
 ## Safety invariants (do not weaken)
 
 1. A locked item is never selectable, not even with `a`. Locks come from a live process inside the item's scope (`lsof`), a booted simulator, a running emulator, or a running process named in the rule's `busy_when`.
-2. `safe` (preselected) only when the data regenerates by itself, nothing is lost, and recreating it costs nothing relevant. Download caches, Docker volumes, Xcode archives, AVDs, runtimes and project artifacts are never `safe`.
+2. `safe` (preselected) only when the data regenerates by itself, nothing is lost, and recreating it costs nothing relevant. Download caches, Docker volumes, Xcode archives, AVDs, runtimes, project artifacts and app builds are never `safe`.
 3. Nothing is removed without the review screen and `y`. The review lists the exact command of every item, and once it is open, new scan results cannot join the selection.
 4. Right before each removal, `default_recheck` re-checks the same scope and busy names the scan used (`Item.recheck`). A path that changed is reported as `changed since scan` and left alone.
 5. `Guard` limits directory removals to `$HOME`, the scanned folder (unless it is an ancestor of `$HOME`) and explicit extra roots, and refuses the roots and protected folders themselves.
 6. A worktree is `broken` (and removed as a folder) only when its `gitdir:` target no longer exists. When git fails or times out, the worktree is "status unknown", locked, and never removed.
-7. Prefer each tool's native removal command (`git worktree remove`, `xcrun simctl delete`, `docker … prune`, `pnpm store prune`, `brew cleanup`) over deleting files behind the tool's back.
+7. A branch left behind by a removed worktree is offered only when deleting it loses nothing: its tip is in the default branch, or its whole diff landed there as one commit (a verified squash merge). An upstream that is merely gone is never enough, and the default branch is never offered. The branch goes through the review like any item, and the recheck refuses it when it no longer points at the commit that was verified.
+8. Prefer each tool's native removal command (`git worktree remove`, `xcrun simctl delete`, `docker … prune`, `pnpm store prune`, `brew cleanup`) over deleting files behind the tool's back.
 
 Any change touching selection, locks, `safe`, the guard or removal needs a test that fails without it.
 
