@@ -14,7 +14,7 @@ use devsweep::fsutil::disk_free;
 use devsweep::inuse::InUse;
 use devsweep::model::Item;
 use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_removals_until};
-use devsweep::scan::worktrees::AGENT_ROOTS;
+use devsweep::scan::worktrees::{AGENT_ROOTS, leftover_branch};
 use devsweep::scan::{ScanCtx, ScanEvent, all_scanners, run, spawn_all};
 
 /// Find and remove what a developer's Mac accumulates: build artifacts,
@@ -103,7 +103,15 @@ fn start_removal(
     let stop_flag = Arc::clone(&stop);
     std::thread::spawn(move || {
         let recheck = default_recheck(InUse::collect);
-        run_removals_until(items, &RealExecutor, &guard, &recheck, &stop_flag, tx);
+        run_removals_until(
+            items,
+            &RealExecutor,
+            &guard,
+            &recheck,
+            &leftover_branch,
+            &stop_flag,
+            tx,
+        );
     });
     (rx, stop)
 }

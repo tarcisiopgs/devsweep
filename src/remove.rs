@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::Sender;
 
 use crate::inuse::InUse;
-use crate::model::{Item, ItemId, Removal, SourceId, Status};
+use crate::model::{Item, ItemId, LeftoverBranch, Removal, SourceId, Status};
 
 pub trait Executor: Send + Sync {
     fn remove_dir(&self, p: &Path) -> Result<(), String>;
@@ -110,18 +110,27 @@ pub enum RemoveEvent {
     Started(ItemId),
     Ok(ItemId, u64),
     Err(ItemId, String),
+    /// A worktree just removed left this merged branch in its repository.
+    Leftover(LeftoverBranch),
     Finished,
 }
 
-fn is_worktree_remove(removal: &Removal) -> Option<&Path> {
+/// The repository and the worktree of a `git worktree remove`.
+fn worktree_remove(removal: &Removal) -> Option<(&Path, &Path)> {
     match removal {
         Removal::Command {
             argv,
             cwd: Some(cwd),
-        } if argv.len() >= 3 && argv[..3] == ["git", "worktree", "remove"] => Some(cwd.as_path()),
+        } if argv.len() == 4 && argv[..3] == ["git", "worktree", "remove"] => {
+            Some((cwd.as_path(), Path::new(&argv[3])))
+        }
         _ => None,
     }
 }
+
+/// Answers which merged branch a worktree (first argument) would leave in
+/// its repository (second) once removed.
+pub type Leftover<'a> = &'a dyn Fn(&Path, &Path) -> Option<LeftoverBranch>;
 
 /// Every path passes the guard before any of them is touched.
 fn remove_paths(paths: &[PathBuf], exec: &dyn Executor, guard: &Guard) -> Result<(), String> {
@@ -142,10 +151,11 @@ pub fn run_removals(
     exec: &dyn Executor,
     guard: &Guard,
     recheck: &dyn Fn(&Item) -> Result<(), String>,
+    leftover: Leftover,
     tx: Sender<RemoveEvent>,
 ) {
     let never = std::sync::atomic::AtomicBool::new(false);
-    run_removals_until(items, exec, guard, recheck, &never, tx);
+    run_removals_until(items, exec, guard, recheck, leftover, &never, tx);
 }
 
 /// Like [`run_removals`], skipping every item not started yet once `stop`
@@ -156,6 +166,7 @@ pub fn run_removals_until(
     exec: &dyn Executor,
     guard: &Guard,
     recheck: &dyn Fn(&Item) -> Result<(), String>,
+    leftover: Leftover,
     stop: &std::sync::atomic::AtomicBool,
     tx: Sender<RemoveEvent>,
 ) {
@@ -166,7 +177,13 @@ pub fn run_removals_until(
             continue;
         }
         let _ = tx.send(RemoveEvent::Started(item.id));
-        let result = recheck(item).and_then(|()| match &item.removal {
+        let checked = recheck(item);
+        // Read while the worktree still exists, reported only once it is gone.
+        let branch = match (&checked, worktree_remove(&item.removal)) {
+            (Ok(()), Some((repo, wt))) => leftover(wt, repo),
+            _ => None,
+        };
+        let result = checked.and_then(|()| match &item.removal {
             Removal::RemoveDir(p) => guard.check(p).and_then(|()| exec.remove_dir(p)),
             Removal::ClearDir(p) => guard.check(p).and_then(|()| exec.clear_dir(p)),
             Removal::RemovePaths(paths) => remove_paths(paths, exec, guard),
@@ -174,10 +191,13 @@ pub fn run_removals_until(
         });
         match result {
             Ok(()) => {
-                if let Some(repo) = is_worktree_remove(&item.removal) {
+                if let Some((repo, _)) = worktree_remove(&item.removal) {
                     repos_to_prune.insert(repo.to_path_buf());
                 }
                 let _ = tx.send(RemoveEvent::Ok(item.id, item.size.unwrap_or(0)));
+                if let Some(branch) = branch {
+                    let _ = tx.send(RemoveEvent::Leftover(branch));
+                }
             }
             Err(msg) => {
                 let _ = tx.send(RemoveEvent::Err(item.id, msg));
@@ -219,6 +239,14 @@ pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result
                 Err(err) => return Err(format!("could not check: {err}")),
             }
         }
+        if let Some((argv, value)) = &item.recheck.expect {
+            let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+            let same = crate::scan::run_timeout(&argv, None, GIT_TIMEOUT)
+                .is_ok_and(|out| out.trim() == value.as_str());
+            if !same {
+                return changed();
+            }
+        }
         let Some(path) = &item.path else {
             return Ok(());
         };
@@ -258,7 +286,7 @@ pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Item, Removal, SourceId};
+    use crate::model::{Item, LeftoverBranch, Removal, SourceId};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -337,8 +365,137 @@ mod tests {
         recheck: &dyn Fn(&Item) -> Result<(), String>,
     ) -> Vec<RemoveEvent> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        run_removals(items, exec, g, recheck, tx);
+        run_removals(items, exec, g, recheck, &|_, _| None, tx);
         rx.iter().collect()
+    }
+
+    fn worktree_item(h: &Path, id: u64, name: &str) -> Item {
+        let argv = vec![
+            "git".into(),
+            "worktree".into(),
+            "remove".into(),
+            h.join(name).display().to_string(),
+        ];
+        item(
+            id,
+            SourceId::Worktrees,
+            Some(h.join(name)),
+            Removal::Command {
+                argv,
+                cwd: Some(h.join("r")),
+            },
+            1,
+        )
+    }
+
+    fn feat(h: &Path) -> LeftoverBranch {
+        LeftoverBranch {
+            repo: h.join("r"),
+            branch: "feat".into(),
+            head: "abc".into(),
+        }
+    }
+
+    #[test]
+    fn leftover_branch_is_reported_once_its_worktree_is_removed() {
+        let (_d, h) = home();
+        let exec = Fake::default();
+        let asked = Mutex::new(Vec::new());
+        let leftover = |wt: &Path, repo: &Path| {
+            // Asked while the worktree is still there to be read.
+            assert!(exec.calls.lock().unwrap().is_empty());
+            asked
+                .lock()
+                .unwrap()
+                .push((wt.to_path_buf(), repo.to_path_buf()));
+            Some(feat(&h))
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        run_removals(
+            vec![worktree_item(&h, 1, "w1")],
+            &exec,
+            &guard(&h),
+            &ok,
+            &leftover,
+            tx,
+        );
+        let events: Vec<RemoveEvent> = rx.iter().collect();
+        assert_eq!(*asked.lock().unwrap(), vec![(h.join("w1"), h.join("r"))]);
+        let removed = events
+            .iter()
+            .position(|e| matches!(e, RemoveEvent::Ok(1, _)))
+            .unwrap();
+        let reported = events
+            .iter()
+            .position(|e| matches!(e, RemoveEvent::Leftover(b) if *b == feat(&h)))
+            .unwrap();
+        assert!(removed < reported);
+    }
+
+    #[test]
+    fn no_leftover_branch_when_the_worktree_was_not_removed() {
+        let (_d, h) = home();
+        let leftover = |_: &Path, _: &Path| Some(feat(&h));
+        let failing = Fake {
+            fail_on: Some("worktree remove".into()),
+            ..Default::default()
+        };
+        let refuse = |_: &Item| Err("changed since scan".to_string());
+        for (exec, recheck) in [
+            (&failing, &ok as &dyn Fn(&Item) -> Result<(), String>),
+            (&Fake::default(), &refuse),
+        ] {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            run_removals(
+                vec![worktree_item(&h, 1, "w1")],
+                exec,
+                &guard(&h),
+                recheck,
+                &leftover,
+                tx,
+            );
+            assert!(!rx.iter().any(|e| matches!(e, RemoveEvent::Leftover(_))));
+        }
+    }
+
+    #[test]
+    fn only_worktree_removals_are_asked_for_a_leftover_branch() {
+        let (_d, h) = home();
+        fs::create_dir_all(h.join("a/node_modules")).unwrap();
+        let exec = Fake::default();
+        let it = item(
+            1,
+            SourceId::Artifacts,
+            Some(h.join("a/node_modules")),
+            Removal::RemoveDir(h.join("a/node_modules")),
+            1,
+        );
+        let leftover = |_: &Path, _: &Path| -> Option<LeftoverBranch> { panic!("asked") };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        run_removals(vec![it], &exec, &guard(&h), &ok, &leftover, tx);
+        assert!(rx.iter().any(|e| matches!(e, RemoveEvent::Ok(1, _))));
+    }
+
+    #[test]
+    fn recheck_refuses_when_the_expected_output_changed() {
+        // A branch that moved after it was verified as merged.
+        let mut it = item(
+            1,
+            SourceId::Branches,
+            None,
+            Removal::Command {
+                argv: vec!["git".into(), "branch".into(), "-D".into(), "feat".into()],
+                cwd: None,
+            },
+            0,
+        );
+        let none = crate::inuse::InUse::default;
+        it.recheck.expect = Some((vec!["echo".into(), "abc".into()], "abc".into()));
+        assert_eq!(default_recheck(none)(&it), Ok(()));
+        it.recheck.expect = Some((vec!["echo".into(), "def".into()], "abc".into()));
+        assert_eq!(default_recheck(none)(&it), Err("changed since scan".into()));
+        it.recheck.expect = Some((vec!["false".into()], "abc".into()));
+        assert_eq!(default_recheck(none)(&it), Err("changed since scan".into()));
     }
 
     fn ok(_: &Item) -> Result<(), String> {
@@ -459,7 +616,15 @@ mod tests {
             Ok(())
         };
         let (tx, rx) = crossbeam_channel::unbounded();
-        run_removals_until(items, &exec, &guard(&h), &stop_after_first, &stop, tx);
+        run_removals_until(
+            items,
+            &exec,
+            &guard(&h),
+            &stop_after_first,
+            &|_, _| None,
+            &stop,
+            tx,
+        );
         let events: Vec<RemoveEvent> = rx.iter().collect();
         assert_eq!(*exec.calls.lock().unwrap(), vec!["a".to_string()]);
         assert!(

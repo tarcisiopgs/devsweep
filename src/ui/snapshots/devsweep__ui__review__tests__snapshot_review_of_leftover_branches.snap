@@ -1,0 +1,25 @@
+---
+source: src/ui/review.rs
+assertion_line: 534
+expression: render(&a).backend()
+---
+"┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
+"│ Review · 2 branches                                                                              │"
+"│                                                                                                  │"
+"│ Branches                                                                                         │"
+"│   glowz · feat/robots-txt                                                                 merged │"
+"│     (cd /Users/u/Workspace/glowz) git branch -D feat/robots-txt                                  │"
+"│   glowz · worktree-validated-tinkering-marble                                             merged │"
+"│     (cd /Users/u/Workspace/glowz) git branch -D worktree-validated-tinkering-marble              │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│──────────────────────────────────────────────────────────────────────────────────────────────────│"
+"│ y confirm · ↑↓ scroll · any other key back                                                       │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

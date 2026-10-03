@@ -45,6 +45,10 @@ or build from source with `cargo build --release`.
 
 - **Worktrees have context.** See merged, dirty and stale status. Worktrees with
   unknown Git status are locked; eligible clean, merged worktrees can be preselected.
+- **Merged branches go with their worktrees.** After a removal, devsweep offers
+  to delete the branches the removed worktrees left behind, but only those whose
+  work is already in the default branch (merged or squash-merged). They go
+  through the same review, with `git branch -D` shown for each one.
 - **Preselected does not mean “everything disposable.”** Project artifacts,
   Android AVDs, iOS runtimes, Docker volumes, Xcode archives and the Trash are
   left for you to choose.
@@ -66,7 +70,7 @@ when access is missing.
 
 | Source | Section | Preselected when |
 |---|---|---|
-| Project artifacts: `node_modules`, `.venv`, `Pods`, `.next`, `.expo`, `.gradle`, `.cxx`, `target`, `vendor`, `__pycache__`…; `dist`/`build`/`out` only when git ignores them | This folder | never |
+| Project artifacts: `node_modules`, `.venv`, `Pods`, `.next`, `.expo`, `.gradle`, `.cxx`, `target`, `vendor`, `__pycache__`…; `dist`/`build`/`out` only when git ignores them; app builds (`.ipa`, `.apk`, `.aab`) that git does not track | This folder | never |
 | Git worktrees of the repositories in the folder, outside the agent folders below | This folder | merged, clean, no ignored files beyond build artifacts, and unlocked |
 | Agent worktrees in `~/.codex/worktrees`, `~/orca/workspaces`, `~/.claude-squad/worktrees` | Machine | merged, clean, no ignored files beyond build artifacts, and unlocked |
 | iOS simulators and runtimes | Machine | the simulator is unavailable |

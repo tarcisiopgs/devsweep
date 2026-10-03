@@ -1,4 +1,5 @@
-//! Rebuildable project artifacts: `node_modules`, `.venv`, `Pods`, …
+//! Rebuildable project artifacts: `node_modules`, `.venv`, `Pods`, …, and
+//! the app builds (`.ipa`, `.apk`, `.aab`) left next to them.
 
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ignore::WalkState;
 
 use crate::fsutil::days_since;
-use crate::model::{Item, Removal, SourceId};
+use crate::model::{Item, Removal, SourceId, Status};
 use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, size_later};
 
 /// Names that are always a rebuildable artifact.
@@ -30,6 +31,22 @@ const UNAMBIGUOUS: &[&str] = &[
 
 /// Names that are an artifact only when git ignores them.
 const AMBIGUOUS: &[&str] = &["dist", "build", "out"];
+
+/// App build files, by extension, and the platform they are for.
+const APP_BUILDS: &[(&str, &str)] = &[
+    ("ipa", "iOS build"),
+    ("apk", "Android build"),
+    ("aab", "Android build"),
+];
+
+/// The platform of an app build file, from its extension.
+fn app_build(file: &Path) -> Option<&'static str> {
+    let ext = file.extension()?.to_str()?.to_ascii_lowercase();
+    APP_BUILDS
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, kind)| *kind)
+}
 
 /// Files that mark the root of a project.
 const MANIFESTS: &[&str] = &[
@@ -70,6 +87,7 @@ impl Scanner for Artifacts {
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
         let skipped = AtomicU64::new(0);
         let ambiguous = Mutex::new(Vec::new());
+        let builds = Mutex::new(Vec::new());
 
         ignore::WalkBuilder::new(&ctx.target)
             .standard_filters(false)
@@ -85,10 +103,16 @@ impl Scanner for Artifacts {
                             return WalkState::Continue;
                         }
                     };
+                    let path = entry.path();
                     if !entry.file_type().is_some_and(|t| t.is_dir()) {
+                        // A symlink is neither: it is never followed nor listed.
+                        if entry.file_type().is_some_and(|t| t.is_file())
+                            && app_build(path).is_some()
+                        {
+                            builds.lock().unwrap().push(path.to_path_buf());
+                        }
                         return WalkState::Continue;
                     }
-                    let path = entry.path();
                     if is_pruned(path, ctx) {
                         return WalkState::Skip;
                     }
@@ -112,6 +136,16 @@ impl Scanner for Artifacts {
         if unchecked > 0 {
             let note =
                 format!("dist/build/out skipped in {unchecked} repositories (git did not answer)");
+            let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
+        }
+
+        let (untracked, unchecked) = git_untracked(builds.into_inner().unwrap());
+        for path in untracked {
+            emit(ctx, tx, &path);
+        }
+        if unchecked > 0 {
+            let note =
+                format!("app builds skipped in {unchecked} repositories (git did not answer)");
             let _ = tx.send(ScanEvent::Note(SourceId::Artifacts, note));
         }
 
@@ -149,17 +183,31 @@ fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
         .display()
         .to_string();
     let id = ctx.next_id();
+    // An app build is a single file; everything else here is a folder.
+    let build = app_build(path).filter(|_| path.is_file());
     let item = Item {
         id,
         source: SourceId::Artifacts,
         label: format!("{project_label} · {artifact_rel}"),
         path: Some(path.to_path_buf()),
         size: None,
-        status: vec![],
+        status: build
+            .map(|kind| Status::Detail(kind.into()))
+            .into_iter()
+            .collect(),
         lock: ctx.inuse.lock_for(&project),
         safe: false,
-        removal: Removal::RemoveDir(path.to_path_buf()),
-        age_days: age_days(path, &project),
+        removal: match build {
+            Some(_) => Removal::RemovePaths(vec![path.to_path_buf()]),
+            None => Removal::RemoveDir(path.to_path_buf()),
+        },
+        age_days: match build {
+            Some(_) => std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(days_since),
+            None => age_days(path, &project),
+        },
         recheck: crate::model::Recheck {
             scope: Some(project.clone()),
             busy: vec![],
@@ -199,12 +247,67 @@ fn age_days(artifact: &Path, project: &Path) -> Option<u32> {
     Some(days_since(newest))
 }
 
+/// The repository holding `path`, when there is one.
+fn repo_of(path: &Path) -> Option<&Path> {
+    path.ancestors().skip(1).find(|d| d.join(".git").exists())
+}
+
+/// Drop the files git tracks, asking once per repository: deleting one
+/// would leave the repository with a missing file. Files outside any
+/// repository are kept. The second value counts the repositories git could
+/// not answer for, whose files are dropped as well.
+fn git_untracked(candidates: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
+    let mut by_repo: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    let mut untracked = Vec::new();
+    for path in candidates {
+        match repo_of(&path) {
+            Some(repo) => by_repo.entry(repo.to_path_buf()).or_default().push(path),
+            None => untracked.push(path),
+        }
+    }
+    let mut failed = 0;
+    for (repo, paths) in by_repo {
+        match tracked(&repo, &paths) {
+            Ok(tracked) => untracked.extend(paths.into_iter().filter(|p| !tracked.contains(p))),
+            Err(_) => failed += 1,
+        }
+    }
+    untracked.sort();
+    (untracked, failed)
+}
+
+/// The paths among `paths` that git tracks in `repo`.
+fn tracked(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let repo_arg = repo.to_string_lossy();
+    let rel: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            p.strip_prefix(repo)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let mut argv = vec!["git", "-C", &repo_arg, "ls-files", "-z", "--"];
+    argv.extend(rel.iter().map(String::as_str));
+    let out = crate::scan::exec(&argv, None, None, crate::scan::RUN_TIMEOUT)?;
+    if !out.status.success() {
+        anyhow::bail!("git ls-files failed in {}", repo.display());
+    }
+    Ok(out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| repo.join(std::ffi::OsStr::from_bytes(chunk)))
+        .collect())
+}
+
 /// Keep only the candidates git ignores, asking once per repository. The
 /// second value counts the repositories git could not answer for.
 fn git_ignored(candidates: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
     let mut by_repo: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     for path in candidates {
-        if let Some(repo) = path.ancestors().skip(1).find(|d| d.join(".git").exists()) {
+        if let Some(repo) = repo_of(&path) {
             by_repo.entry(repo.to_path_buf()).or_default().push(path);
         }
     }
@@ -253,7 +356,7 @@ fn check_ignore(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> 
 mod tests {
     use super::*;
     use crate::inuse::InUse;
-    use crate::model::Removal;
+    use crate::model::{Removal, Status};
     use std::fs;
     use std::path::Path;
     use std::process::Command;
@@ -468,5 +571,102 @@ mod tests {
             ev.iter()
                 .any(|e| matches!(e, ScanEvent::Size(i, n) if *i == id && *n > 0))
         );
+    }
+
+    fn build(root: &Path, rel: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, vec![7u8; 8192]).unwrap();
+    }
+
+    #[test]
+    fn finds_app_builds_left_in_a_project() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("app")).unwrap();
+        fs::write(d.path().join("app/package.json"), "{}").unwrap();
+        for rel in [
+            "app/build-1.ipa",
+            "app/out-dir/app-release.APK",
+            "app/app.aab",
+        ] {
+            build(d.path(), rel);
+        }
+        fs::write(d.path().join("app/notes.txt"), "x").unwrap();
+        let ev = scan_with(d.path(), InUse::default());
+        let mut found = items(&ev);
+        found.sort_by_key(|i| i.label.clone());
+        let labels: Vec<&str> = found.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "app · app.aab",
+                "app · build-1.ipa",
+                "app · out-dir/app-release.APK"
+            ]
+        );
+        let ipa = found[1];
+        assert_eq!(ipa.status, vec![Status::Detail("iOS build".into())]);
+        assert_eq!(
+            found[0].status,
+            vec![Status::Detail("Android build".into())]
+        );
+        assert!(!ipa.safe, "a build may be the only copy of a release");
+        assert_eq!(
+            ipa.removal,
+            Removal::RemovePaths(vec![d.path().join("app/build-1.ipa")])
+        );
+        assert_eq!(ipa.recheck.scope, Some(d.path().join("app")));
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, ScanEvent::Size(id, n) if *id == ipa.id && *n >= 8192))
+        );
+    }
+
+    #[test]
+    fn app_build_tracked_by_git_is_not_reported() {
+        // A committed fixture would come back as a deleted file in `git status`.
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        init_repo(&repo);
+        build(&repo, "fixtures/sample.apk");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "x"]);
+        build(&repo, "local.apk");
+        let ev = scan_with(d.path(), InUse::default());
+        let found = items(&ev);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].label, "r · local.apk");
+    }
+
+    #[test]
+    fn app_builds_are_skipped_when_git_does_not_answer() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        fs::create_dir_all(repo.join(".git")).unwrap(); // not a repository
+        build(&repo, "local.apk");
+        let ev = scan_with(d.path(), InUse::default());
+        assert!(items(&ev).is_empty());
+        assert!(ev.iter().any(
+            |e| matches!(e, ScanEvent::Note(_, n) if n == "app builds skipped in 1 repositories (git did not answer)")
+        ));
+    }
+
+    #[test]
+    fn app_build_inside_an_artifact_folder_is_not_listed_twice() {
+        let d = tempfile::tempdir().unwrap();
+        mk(d.path(), "a/node_modules");
+        build(d.path(), "a/node_modules/pkg/demo.apk");
+        let ev = scan_with(d.path(), InUse::default());
+        assert_eq!(items(&ev).len(), 1);
+    }
+
+    #[test]
+    fn symlinked_app_build_is_ignored() {
+        let d = tempfile::tempdir().unwrap();
+        let o = tempfile::tempdir().unwrap();
+        build(o.path(), "real.ipa");
+        fs::create_dir_all(d.path().join("a")).unwrap();
+        std::os::unix::fs::symlink(o.path().join("real.ipa"), d.path().join("a/link.ipa")).unwrap();
+        assert!(items(&scan_with(d.path(), InUse::default())).is_empty());
     }
 }

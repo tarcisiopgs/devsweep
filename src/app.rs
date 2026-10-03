@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::model::{Item, ItemId, SourceId, format_size_long};
+use crate::model::{
+    Item, ItemId, LeftoverBranch, Recheck, Removal, SourceId, Status, format_size_long,
+};
 use crate::remove::RemoveEvent;
 use crate::scan::ScanEvent;
 
@@ -114,6 +116,11 @@ pub struct App {
     pub terminal: String,
     /// The user already opened the Full Disk Access settings.
     pub opened_settings: bool,
+    /// Merged branches the removed worktrees left in their repositories,
+    /// offered on the receipt.
+    pub leftovers: Vec<LeftoverBranch>,
+    /// The review on screen is the leftover branches', opened from the receipt.
+    reviewing_branches: bool,
     quit_after_removal: bool,
 }
 
@@ -143,6 +150,8 @@ impl App {
             disk_free: (None, None),
             terminal: "your terminal".into(),
             opened_settings: false,
+            leftovers: Vec::new(),
+            reviewing_branches: false,
             quit_after_removal: false,
         }
     }
@@ -190,6 +199,7 @@ impl App {
             RemoveEvent::Err(id, msg) => {
                 self.progress.insert(id, Progress::Err(msg));
             }
+            RemoveEvent::Leftover(branch) => self.leftovers.push(branch),
             RemoveEvent::Finished => {
                 self.screen = Screen::Done;
                 if self.quit_after_removal {
@@ -231,6 +241,12 @@ impl App {
                     self.review_scroll = self.review_scroll.saturating_sub(1);
                     Action::None
                 }
+                _ if self.reviewing_branches => {
+                    // Back to the receipt: the list behind it is stale.
+                    self.close_branch_review();
+                    self.screen = Screen::Done;
+                    Action::None
+                }
                 _ => {
                     self.screen = Screen::List;
                     Action::None
@@ -253,6 +269,10 @@ impl App {
                 KeyCode::Char('r') => {
                     self.reset();
                     Action::Rescan
+                }
+                KeyCode::Char('b') if !self.leftovers.is_empty() => {
+                    self.review_branches();
+                    Action::None
                 }
                 _ => Action::None,
             },
@@ -393,10 +413,93 @@ impl App {
         self.progress = items.iter().map(|i| (i.id, Progress::Pending)).collect();
         self.removal = items.clone();
         self.screen = Screen::Removing;
+        if self.reviewing_branches {
+            self.reviewing_branches = false;
+            self.leftovers.clear();
+        }
         Action::StartRemoval(items)
     }
 
+    /// Open the review on the leftover branches alone. They are items like
+    /// any other, so the same review, recheck and removal apply to them.
+    fn review_branches(&mut self) {
+        let first = self
+            .sources
+            .values()
+            .flat_map(|v| v.items.iter())
+            .map(|i| i.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let items: Vec<Item> = self
+            .leftovers
+            .iter()
+            .zip(first..)
+            .map(|(b, id)| {
+                let repo = b.repo.file_name().unwrap_or(b.repo.as_os_str());
+                Item {
+                    id,
+                    source: SourceId::Branches,
+                    label: format!("{} · {}", repo.to_string_lossy(), b.branch),
+                    path: None,
+                    size: Some(0),
+                    status: vec![Status::Merged],
+                    lock: None,
+                    safe: false,
+                    // `-d` would compare with whatever the repository has
+                    // checked out; the merge was verified against the default
+                    // branch and the recheck pins the commit.
+                    removal: Removal::Command {
+                        argv: ["git", "branch", "-D", &b.branch]
+                            .map(String::from)
+                            .to_vec(),
+                        cwd: Some(b.repo.clone()),
+                    },
+                    age_days: None,
+                    recheck: Recheck {
+                        expect: Some((
+                            vec![
+                                "git".into(),
+                                "-C".into(),
+                                b.repo.to_string_lossy().into_owned(),
+                                "rev-parse".into(),
+                                format!("refs/heads/{}", b.branch),
+                            ],
+                            b.head.clone(),
+                        )),
+                        ..Default::default()
+                    },
+                }
+            })
+            .collect();
+        self.selected = items.iter().map(|i| i.id).collect();
+        self.sources.insert(
+            SourceId::Branches,
+            SourceView {
+                state: SourceState::Done,
+                items,
+                notes: Vec::new(),
+            },
+        );
+        self.reviewing_branches = true;
+        self.review_scroll = 0;
+        self.screen = Screen::Review;
+    }
+
+    fn close_branch_review(&mut self) {
+        self.sources.remove(&SourceId::Branches);
+        self.selected.clear();
+        self.reviewing_branches = false;
+    }
+
+    /// The removal on screen deleted leftover branches, which free no space.
+    pub fn branch_pass(&self) -> bool {
+        !self.removal.is_empty() && self.removal.iter().all(|i| i.source == SourceId::Branches)
+    }
+
     fn reset(&mut self) {
+        self.close_branch_review();
+        self.leftovers.clear();
         for view in self.sources.values_mut() {
             *view = SourceView::new();
         }
@@ -545,8 +648,12 @@ impl App {
     /// One-line result of the removal, used by the native notification.
     pub fn completion_summary(&self) -> String {
         let (n, bytes) = self.freed_total();
-        let noun = if n == 1 { "item" } else { "items" };
-        let mut summary = format!("Freed {} in {n} {noun}", format_size_long(bytes));
+        let mut summary = if self.branch_pass() {
+            format!("Deleted {n} {}", if n == 1 { "branch" } else { "branches" })
+        } else {
+            let noun = if n == 1 { "item" } else { "items" };
+            format!("Freed {} in {n} {noun}", format_size_long(bytes))
+        };
         let failed = self
             .progress
             .values()
@@ -562,7 +669,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Removal;
+    use crate::model::{LeftoverBranch, Removal};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -1063,5 +1170,101 @@ mod tests {
         a.on_key(ch('/'));
         a.on_key(ch('a'));
         assert_eq!(a.cursor_item, 0);
+    }
+
+    fn feat() -> LeftoverBranch {
+        LeftoverBranch {
+            repo: PathBuf::from("/w/glowz"),
+            branch: "feat".into(),
+            head: "abc123".into(),
+        }
+    }
+
+    /// Both worktrees removed, one of them leaving a merged branch behind.
+    fn done_with_leftover() -> App {
+        let mut a = removing();
+        a.on_remove(RemoveEvent::Ok(1, 100));
+        a.on_remove(RemoveEvent::Leftover(feat()));
+        a.on_remove(RemoveEvent::Ok(2, 50));
+        a.on_remove(RemoveEvent::Finished);
+        a
+    }
+
+    #[test]
+    fn b_on_done_reviews_the_leftover_branches_and_y_deletes_them() {
+        let mut a = done_with_leftover();
+        assert_eq!(a.on_key(ch('b')), Action::None);
+        assert_eq!(a.screen, Screen::Review);
+        let groups = a.review_groups();
+        assert_eq!(groups.len(), 1, "only the branches are under review");
+        let (source, items) = &groups[0];
+        assert_eq!(*source, SourceId::Branches);
+        assert_eq!(items[0].label, "glowz · feat");
+        assert_eq!(
+            items[0].removal.describe(),
+            "(cd /w/glowz) git branch -D feat"
+        );
+        assert!(!items[0].safe);
+        // The branch must still be at the commit that was verified.
+        let (argv, head) = items[0].recheck.expect.clone().unwrap();
+        assert_eq!(
+            argv,
+            ["git", "-C", "/w/glowz", "rev-parse", "refs/heads/feat"]
+        );
+        assert_eq!(head, "abc123");
+        match a.on_key(ch('y')) {
+            Action::StartRemoval(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].source, SourceId::Branches);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(a.screen, Screen::Removing);
+        assert!(a.leftovers.is_empty(), "offered once");
+    }
+
+    #[test]
+    fn b_on_done_does_nothing_without_leftover_branches() {
+        let mut a = removing();
+        a.on_remove(RemoveEvent::Finished);
+        assert_eq!(a.on_key(ch('b')), Action::None);
+        assert_eq!(a.screen, Screen::Done);
+    }
+
+    #[test]
+    fn leaving_the_branch_review_returns_to_the_receipt() {
+        let mut a = done_with_leftover();
+        a.on_key(ch('b'));
+        assert_eq!(a.on_key(ch('n')), Action::None);
+        assert_eq!(a.screen, Screen::Done);
+        assert_eq!(a.leftovers, vec![feat()], "still on offer");
+        assert_eq!(a.freed_total(), (2, 150));
+        a.on_key(ch('b'));
+        assert_eq!(a.screen, Screen::Review);
+        assert_eq!(a.selected_total().0, 1);
+    }
+
+    #[test]
+    fn branch_pass_summary_counts_branches_not_bytes() {
+        let mut a = done_with_leftover();
+        a.on_key(ch('b'));
+        let Action::StartRemoval(items) = a.on_key(ch('y')) else {
+            panic!("no removal");
+        };
+        a.on_remove(RemoveEvent::Ok(items[0].id, 0));
+        a.on_remove(RemoveEvent::Finished);
+        assert!(a.branch_pass());
+        assert_eq!(a.completion_summary(), "Deleted 1 branch");
+    }
+
+    #[test]
+    fn rescan_forgets_the_leftover_branches() {
+        let mut a = done_with_leftover();
+        a.on_key(ch('b'));
+        a.on_key(ch('n'));
+        assert_eq!(a.on_key(ch('r')), Action::Rescan);
+        assert!(a.leftovers.is_empty());
+        assert!(!a.sources.contains_key(&SourceId::Branches));
+        assert!(a.selected.is_empty());
     }
 }

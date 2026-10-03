@@ -49,6 +49,11 @@ fn footer(f: &mut Frame, area: Rect, keys: &str) {
     );
 }
 
+/// `3 branches`, `1 branch`.
+fn branches(n: usize) -> String {
+    format!("{n} {}", if n == 1 { "branch" } else { "branches" })
+}
+
 fn right_aligned(left: Vec<Span<'static>>, right: Span<'static>, width: u16) -> Line<'static> {
     let used: usize = left.iter().map(|s| s.width()).sum::<usize>() + right.width();
     let mut spans = left;
@@ -76,6 +81,11 @@ fn scroll(lines: Vec<Line<'static>>, focus: usize, height: u16) -> Vec<Line<'sta
 pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
     let (head, body, foot) = layout(f, app, area);
     let (n, bytes) = app.selected_total();
+    // Deleting a branch frees no space: sizes would only read `0 B`.
+    let on_branches = app
+        .review_groups()
+        .iter()
+        .all(|(source, _)| *source == SourceId::Branches);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -85,7 +95,11 @@ pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" · {n} items · {}", format_size_long(bytes)),
+                if on_branches {
+                    format!(" · {}", branches(n))
+                } else {
+                    format!(" · {n} items · {}", format_size_long(bytes))
+                },
                 title(),
             ),
         ])),
@@ -95,12 +109,16 @@ pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
     for (source, items) in app.review_groups() {
         lines.push(Line::styled(source.label().to_string(), title()));
         for item in items {
-            let size = Span::styled(
-                item.size
-                    .map(format_size_long)
-                    .unwrap_or_else(|| "…".into()),
-                Style::default().fg(Color::White),
-            );
+            let size = if source == SourceId::Branches {
+                Span::styled("merged", green())
+            } else {
+                Span::styled(
+                    item.size
+                        .map(format_size_long)
+                        .unwrap_or_else(|| "…".into()),
+                    Style::default().fg(Color::White),
+                )
+            };
             lines.push(right_aligned(
                 vec![
                     Span::raw("  "),
@@ -145,6 +163,10 @@ fn progress_line(app: &App, item: &Item, width: u16) -> Line<'static> {
             ),
             Span::styled("removing", Style::default().fg(Color::Yellow)),
         ),
+        Progress::Ok(_) if item.source == SourceId::Branches => (
+            Span::styled("  ✓ ", green()),
+            Span::styled("deleted", green()),
+        ),
         Progress::Ok(bytes) => (
             Span::styled("  ✓ ", green()),
             Span::styled(format_size_long(*bytes), green()),
@@ -176,11 +198,15 @@ pub fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(
-                " · {finished} of {} · {} freed so far",
-                app.removal.len(),
-                format_size_long(freed)
-            ),
+            if app.branch_pass() {
+                format!(" · {finished} of {}", app.removal.len())
+            } else {
+                format!(
+                    " · {finished} of {} · {} freed so far",
+                    app.removal.len(),
+                    format_size_long(freed)
+                )
+            },
             title(),
         ),
     ]);
@@ -213,8 +239,10 @@ pub fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
 /// what was left alone with the reason and the next step.
 fn draw_done(f: &mut Frame, app: &App, area: Rect) {
     let (head, body, foot) = layout(f, app, area);
-    let (_, freed) = app.freed_total();
+    let (removed, freed) = app.freed_total();
+    let branch_pass = app.branch_pass();
     let disk = match app.disk_free {
+        _ if branch_pass => Span::raw(""),
         (Some(before), Some(after)) => Span::styled(
             format!(
                 "disk free {} → {}",
@@ -228,7 +256,11 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(right_aligned(
             vec![Span::styled(
-                format!("✓ Freed {}", format_size_long(freed)),
+                if branch_pass {
+                    format!("✓ Deleted {}", branches(removed))
+                } else {
+                    format!("✓ Freed {}", format_size_long(freed))
+                },
                 green().add_modifier(Modifier::BOLD),
             )],
             disk,
@@ -237,7 +269,11 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
         head,
     );
 
-    let by_source = app.freed_by_source();
+    let by_source = if branch_pass {
+        Vec::new()
+    } else {
+        app.freed_by_source()
+    };
     let label_w = by_source
         .iter()
         .map(|(s, _, _)| s.label().chars().count())
@@ -270,7 +306,9 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
         }
         lines.push(Line::styled("Everything selected was removed.", dim()));
     } else {
-        lines.push(Line::default());
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
         lines.push(Line::styled(
             format!("✗ {} not removed", failed.len()),
             red().add_modifier(Modifier::BOLD),
@@ -296,8 +334,36 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
             dim(),
         ));
     }
+    let left = app.leftovers.len();
+    if left > 0 {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            if left == 1 {
+                "1 merged branch was left behind by a removed worktree.".to_string()
+            } else {
+                format!("{left} merged branches were left behind by the removed worktrees.")
+            },
+            Style::default().fg(Color::White),
+        ));
+        lines.push(Line::styled(
+            if left == 1 {
+                "  Press b to review and delete it."
+            } else {
+                "  Press b to review and delete them."
+            },
+            dim(),
+        ));
+    }
     f.render_widget(Paragraph::new(lines), body);
-    footer(f, foot, "r rescan · q quit");
+    footer(
+        f,
+        foot,
+        if left > 0 {
+            "b branches · r rescan · q quit"
+        } else {
+            "r rescan · q quit"
+        },
+    );
 }
 
 #[cfg(test)]
@@ -429,5 +495,57 @@ mod tests {
     #[test]
     fn snapshot_done_without_failures() {
         insta::assert_snapshot!(render(&done(false)).backend());
+    }
+
+    fn leftover(repo: &str, branch: &str) -> RemoveEvent {
+        RemoveEvent::Leftover(crate::model::LeftoverBranch {
+            repo: PathBuf::from(repo),
+            branch: branch.into(),
+            head: "5d69b47f".into(),
+        })
+    }
+
+    /// Everything removed, two of the worktrees leaving a merged branch.
+    fn done_with_leftovers() -> App {
+        let mut a = reviewing();
+        a.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        a.on_remove(RemoveEvent::Ok(3, 1_623_000_000));
+        a.on_remove(RemoveEvent::Ok(1, 412_000_000));
+        a.on_remove(leftover("/Users/u/Workspace/glowz", "feat/robots-txt"));
+        a.on_remove(RemoveEvent::Ok(2, 95_000_000));
+        a.on_remove(leftover(
+            "/Users/u/Workspace/glowz",
+            "worktree-validated-tinkering-marble",
+        ));
+        a.disk_free = (Some(41_000_000_000), Some(43_100_000_000));
+        a.on_remove(RemoveEvent::Finished);
+        a
+    }
+
+    #[test]
+    fn snapshot_done_offering_leftover_branches() {
+        insta::assert_snapshot!(render(&done_with_leftovers()).backend());
+    }
+
+    #[test]
+    fn snapshot_review_of_leftover_branches() {
+        let mut a = done_with_leftovers();
+        a.on_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        insta::assert_snapshot!(render(&a).backend());
+    }
+
+    #[test]
+    fn snapshot_done_after_deleting_branches() {
+        let mut a = done_with_leftovers();
+        a.on_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        let crate::app::Action::StartRemoval(items) =
+            a.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+        else {
+            panic!("no removal");
+        };
+        a.on_remove(RemoveEvent::Ok(items[0].id, 0));
+        a.on_remove(RemoveEvent::Err(items[1].id, "changed since scan".into()));
+        a.on_remove(RemoveEvent::Finished);
+        insta::assert_snapshot!(render(&a).backend());
     }
 }

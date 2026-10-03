@@ -20,10 +20,13 @@ pub enum SourceId {
     Xcode,
     Homebrew,
     Trash,
+    /// Branches left behind by removed worktrees. Never scanned: offered as
+    /// a follow-up once the removal is done.
+    Branches,
 }
 
 impl SourceId {
-    pub const ALL: [SourceId; 10] = [
+    pub const ALL: [SourceId; 11] = [
         SourceId::Artifacts,
         SourceId::Worktrees,
         SourceId::AgentWorktrees,
@@ -34,6 +37,7 @@ impl SourceId {
         SourceId::Xcode,
         SourceId::Homebrew,
         SourceId::Trash,
+        SourceId::Branches,
     ];
 
     pub fn section(self) -> Section {
@@ -55,6 +59,7 @@ impl SourceId {
             SourceId::Xcode => "Xcode",
             SourceId::Homebrew => "Homebrew",
             SourceId::Trash => "Trash",
+            SourceId::Branches => "Branches",
         }
     }
 }
@@ -138,6 +143,21 @@ pub struct Recheck {
     /// is in use (`xcrun simctl list devices booted` and a device UDID).
     /// A failing command counts as in use.
     pub probe: Option<(Vec<String>, String)>,
+    /// A command whose trimmed output must still be this value (a branch
+    /// still at the commit that was verified as merged). A failing command
+    /// counts as changed.
+    pub expect: Option<(Vec<String>, String)>,
+}
+
+/// A branch whose worktree was removed and whose work is already in the
+/// default branch, so deleting it loses nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeftoverBranch {
+    /// The repository (or bare repository) that owns the branch.
+    pub repo: PathBuf,
+    pub branch: String,
+    /// The commit the branch pointed at when it was verified.
+    pub head: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
