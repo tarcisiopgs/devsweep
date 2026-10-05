@@ -18,14 +18,14 @@ use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_re
 use devsweep::scan::worktrees::{AGENT_ROOTS, leftover_branch};
 use devsweep::scan::{ScanCtx, ScanEvent, all_scanners, run, spawn_all};
 
-/// Find and remove what a developer's Mac accumulates: build artifacts,
+/// Find and remove what a developer's machine accumulates: build artifacts,
 /// agent worktrees, simulators, emulators, Docker leftovers and dev caches.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
     /// Folder to scan for project artifacts and worktrees (defaults to the current directory).
     path: Option<PathBuf>,
-    /// Do not post a macOS notification when a removal finishes.
+    /// Do not post a desktop notification when a removal finishes.
     #[arg(long)]
     no_notify: bool,
 }

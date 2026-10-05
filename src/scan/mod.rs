@@ -120,7 +120,12 @@ pub fn all_scanners(home: &std::path::Path, os: Os) -> Vec<Box<dyn Scanner>> {
         Box::new(docker::Docker),
         Box::new(xcode::Xcode),
         Box::new(homebrew::Homebrew),
-        Box::new(trash::Trash::for_home(home)),
+        Box::new(trash::Trash::for_os(
+            os,
+            home,
+            &crate::platform::process_env,
+            &|bin| which(bin).is_some(),
+        )),
     ];
     if let Ok(catalog) = catalog::Catalog::load() {
         scanners.push(Box::new(catalog));

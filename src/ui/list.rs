@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::app::{App, Focus, SortBy, SourceState};
 use crate::model::{Item, Section, SourceId, Status, format_size_long};
+use crate::platform::Os;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Width of a size column: "999.9 GB".
@@ -85,7 +86,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     }
     draw_bar(f, app, bar);
     if app.show_help {
-        draw_help(f, area);
+        draw_help(f, area, app.os);
     }
 }
 
@@ -494,7 +495,7 @@ fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Key and mark legend, centered over the list.
-fn draw_help(f: &mut Frame, area: Rect) {
+fn draw_help(f: &mut Frame, area: Rect, os: Os) {
     let key = |k: &str, what: &str| {
         Line::from(vec![
             Span::styled(format!("  {k:<11}"), yellow()),
@@ -508,7 +509,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
             Span::styled(what.to_string(), white()),
         ])
     };
-    let lines = vec![
+    let mut lines = vec![
         key("↑↓ j k", "move"),
         key("tab ← →", "switch between sources and items"),
         key("space", "select or unselect the item"),
@@ -545,6 +546,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
             "no commit for a while",
         ),
     ];
+    if os != Os::MacOs {
+        // Full Disk Access is a macOS setting.
+        lines.retain(|line| !line.to_string().contains("Full Disk Access"));
+    }
     let w = 60.min(area.width.saturating_sub(4));
     let h = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     let rect = Rect {
@@ -568,6 +573,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
 mod tests {
     use crate::app::App;
     use crate::model::{Item, Removal, SourceId, Status};
+    use crate::platform::Os;
     use crate::scan::ScanEvent;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
@@ -616,6 +622,7 @@ mod tests {
     /// The worktree list from the spec mockup, focused on its items.
     fn mockup() -> App {
         let mut a = App::new(PathBuf::from("/Users/u/Workspace"), sources());
+        a.os = Os::MacOs;
         let found = [
             item(
                 1,
@@ -726,6 +733,7 @@ mod tests {
     #[test]
     fn snapshot_failed_source() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Artifacts]);
+        a.os = Os::MacOs;
         a.on_scan(ScanEvent::NoAccess(SourceId::Artifacts));
         a.on_scan(ScanEvent::Failed(
             SourceId::Artifacts,
@@ -736,8 +744,35 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_trash_permission_denied_on_linux() {
+        let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
+        a.os = Os::Linux;
+        a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
+        a.on_scan(ScanEvent::Failed(
+            SourceId::Trash,
+            "permission denied reading the Trash".into(),
+        ));
+        a.on_scan(ScanEvent::Done(SourceId::Trash));
+        insta::assert_snapshot!(render(&a, 100, 12).backend());
+    }
+
+    #[test]
+    fn help_mentions_disk_access_only_on_macos() {
+        let help = |os| {
+            let mut a = mockup();
+            a.os = os;
+            a.on_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            render(&a, 100, 24).backend().to_string()
+        };
+        assert!(help(Os::MacOs).contains("Full Disk Access"));
+        assert!(!help(Os::Linux).contains("Full Disk Access"));
+        assert!(!help(Os::Windows).contains("Full Disk Access"));
+    }
+
+    #[test]
     fn snapshot_trash_without_disk_access() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
+        a.os = Os::MacOs;
         a.terminal = "Ghostty".into();
         a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
         a.on_scan(ScanEvent::Failed(
@@ -751,6 +786,7 @@ mod tests {
     #[test]
     fn snapshot_trash_after_opening_settings() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
+        a.os = Os::MacOs;
         a.terminal = "Ghostty".into();
         a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
         a.on_scan(ScanEvent::Failed(

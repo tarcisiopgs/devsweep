@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::model::{
     Item, ItemId, LeftoverBranch, Recheck, Removal, SourceId, Status, format_size_long,
 };
+use crate::platform::Os;
 use crate::remove::{RemoveError, RemoveEvent};
 use crate::scan::ScanEvent;
 
@@ -115,6 +116,8 @@ pub struct App {
     pub show_help: bool,
     /// Free disk space before and after the removal, when `df` answered.
     pub disk_free: (Option<u64>, Option<u64>),
+    /// The system devsweep runs on; decides what the prompts can offer.
+    pub os: Os,
     /// The terminal app, named in the Full Disk Access prompt.
     pub terminal: String,
     /// The user already opened the Full Disk Access settings.
@@ -151,6 +154,7 @@ impl App {
             review_scroll: 0,
             show_help: false,
             disk_free: (None, None),
+            os: Os::current(),
             terminal: "your terminal".into(),
             opened_settings: false,
             leftovers: Vec::new(),
@@ -536,7 +540,7 @@ impl App {
     /// The source failed, or skipped folders, because macOS refused access:
     /// only Full Disk Access for the terminal fixes that.
     pub fn needs_disk_access(&self, source: SourceId) -> bool {
-        self.sources.get(&source).is_some_and(|view| view.no_access)
+        self.os == Os::MacOs && self.sources.get(&source).is_some_and(|view| view.no_access)
     }
 
     pub fn focused_source(&self) -> Option<SourceId> {
@@ -1010,9 +1014,28 @@ mod tests {
         assert_eq!(a.completion_summary(), "Freed 1.9 GB in 1 item · 1 failed");
     }
 
+    /// Full Disk Access is a macOS setting: elsewhere a denied folder is an
+    /// ordinary failure and `o` opens nothing.
+    #[test]
+    fn disk_access_prompt_is_macos_only() {
+        for os in [Os::Linux, Os::Windows] {
+            let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash]);
+            a.os = os;
+            a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
+            a.on_scan(ScanEvent::Failed(
+                SourceId::Trash,
+                "permission denied reading the Trash".into(),
+            ));
+            assert!(!a.needs_disk_access(SourceId::Trash), "{os:?}");
+            assert_eq!(a.on_key(ch('o')), Action::None, "{os:?}");
+            assert!(!a.opened_settings);
+        }
+    }
+
     #[test]
     fn o_opens_disk_access_settings_only_for_a_source_blocked_by_permissions() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Trash, SourceId::Docker]);
+        a.os = Os::MacOs;
         a.on_scan(ScanEvent::NoAccess(SourceId::Trash));
         a.on_scan(ScanEvent::Failed(
             SourceId::Trash,
@@ -1038,6 +1061,7 @@ mod tests {
     #[test]
     fn a_source_is_blocked_by_the_event_not_by_the_wording_of_a_message() {
         let mut a = App::new(PathBuf::from("/w"), vec![SourceId::Artifacts]);
+        a.os = Os::MacOs;
         a.on_scan(ScanEvent::Note(
             SourceId::Artifacts,
             "3 folders skipped (no permission)".into(),
