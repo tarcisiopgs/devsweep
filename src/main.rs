@@ -62,7 +62,7 @@ fn start_scan(target: &Path, home: &Path) -> (Vec<SourceId>, Receiver<ScanEvent>
     let ctx = Arc::new(ScanCtx::new(
         target.to_path_buf(),
         home.to_path_buf(),
-        InUse::collect(),
+        InUse::collect(Os::current()),
     ));
     let (tx, rx) = unbounded();
     spawn_all(ctx, scanners, tx);
@@ -90,7 +90,7 @@ fn start_removal(
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop);
     std::thread::spawn(move || {
-        let recheck = default_recheck(InUse::collect);
+        let recheck = default_recheck(|| InUse::collect(Os::current()));
         run_removals_until(
             items,
             &RealExecutor,
