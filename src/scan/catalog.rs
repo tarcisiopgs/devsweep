@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::fsutil::dir_size;
 use crate::model::{Item, Removal, SourceId, Status};
+use crate::platform::Os;
 use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, run, which};
 
 const FILES: &[&str] = &[
@@ -36,10 +37,17 @@ pub struct Rule {
     pub id: String,
     pub group: String,
     pub label: String,
-    /// `~` is the home folder, `{darwin_cache}` the per-user cache folder;
-    /// the last component may contain one `*`.
+    /// Paths on every system. `~` is the home folder; a path may instead
+    /// start with a token ([`TOKENS`]); one component may contain one `*`.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Paths that only exist on one system, added to `paths` there.
+    #[serde(default)]
+    pub paths_macos: Vec<String>,
+    #[serde(default)]
+    pub paths_linux: Vec<String>,
+    #[serde(default)]
+    pub paths_windows: Vec<String>,
     /// Command printing the path, for tools that choose it at runtime.
     #[serde(default)]
     pub path_cmd: Option<Vec<String>>,
@@ -52,6 +60,18 @@ pub struct Rule {
     #[serde(default)]
     pub busy_when: Vec<String>,
     pub source: String,
+}
+
+impl Rule {
+    /// The path patterns that apply on `os`.
+    pub fn paths_for(&self, os: Os) -> impl Iterator<Item = &str> {
+        let own = match os {
+            Os::MacOs => &self.paths_macos,
+            Os::Linux => &self.paths_linux,
+            Os::Windows => &self.paths_windows,
+        };
+        self.paths.iter().chain(own).map(String::as_str)
+    }
 }
 
 #[derive(Deserialize)]
@@ -71,11 +91,14 @@ pub fn load_catalog() -> anyhow::Result<Vec<Rule>> {
 
 type HasBin = Box<dyn Fn(&str) -> bool + Send + Sync>;
 type Runner = Box<dyn Fn(&[&str]) -> anyhow::Result<String> + Send + Sync>;
+type EnvFn = Box<dyn Fn(&str) -> Option<std::ffi::OsString> + Send + Sync>;
 
 pub struct Catalog {
     pub rules: Vec<Rule>,
     pub has_bin: HasBin,
     pub runner: Runner,
+    /// Environment lookup behind the path tokens.
+    pub env: EnvFn,
 }
 
 impl Catalog {
@@ -84,6 +107,7 @@ impl Catalog {
             rules: load_catalog()?,
             has_bin: Box::new(|b| which(b).is_some()),
             runner: Box::new(run),
+            env: Box::new(crate::platform::process_env),
         })
     }
 
@@ -102,24 +126,52 @@ impl Catalog {
                 .map(|p| vec![PathBuf::from(p)])
                 .unwrap_or_default();
         }
-        rule.paths
-            .iter()
-            .flat_map(|p| expand(p, ctx, &self.runner))
+        rule.paths_for(ctx.os)
+            .flat_map(|p| expand(p, ctx, &self.runner, &self.env))
             .collect()
     }
 }
 
-/// Expand `~`, `{darwin_cache}` and a `*` in the last component.
-fn expand(pattern: &str, ctx: &ScanCtx, runner: &Runner) -> Vec<PathBuf> {
+/// Tokens a path pattern may start with, each a folder the system chooses.
+pub const TOKENS: [&str; 4] = [
+    "{darwin_cache}",
+    "{xdg_cache}",
+    "{localappdata}",
+    "{appdata}",
+];
+
+/// The folder behind a token. A token the system does not define, or
+/// defines as something that is not an absolute path, has none.
+fn token_dir(token: &str, ctx: &ScanCtx, runner: &Runner, env: &EnvFn) -> Option<PathBuf> {
+    let from_env = |key: &str| env(key).map(PathBuf::from).filter(|p| p.is_absolute());
+    match token {
+        "{darwin_cache}" => runner(&["getconf", "DARWIN_USER_CACHE_DIR"])
+            .ok()
+            .map(|dir| PathBuf::from(dir.trim()))
+            .filter(|p| p.is_absolute()),
+        "{xdg_cache}" => {
+            Some(from_env("XDG_CACHE_HOME").unwrap_or_else(|| ctx.home.join(".cache")))
+        }
+        "{localappdata}" => from_env("LOCALAPPDATA"),
+        "{appdata}" => from_env("APPDATA"),
+        _ => None,
+    }
+}
+
+/// Expand `~`, a leading token and a `*` in one component.
+fn expand(pattern: &str, ctx: &ScanCtx, runner: &Runner, env: &EnvFn) -> Vec<PathBuf> {
     let mut p = pattern.to_string();
     if let Some(rest) = p.strip_prefix("~/") {
         p = ctx.home.join(rest).display().to_string();
     }
-    if p.contains("{darwin_cache}") {
-        let Some(dir) = runner(&["getconf", "DARWIN_USER_CACHE_DIR"]).ok() else {
+    let token = TOKENS
+        .iter()
+        .find_map(|t| pattern.strip_prefix(t).map(|rest| (*t, rest)));
+    if let Some((token, rest)) = token {
+        let Some(dir) = token_dir(token, ctx, runner, env) else {
             return vec![];
         };
-        p = p.replace("{darwin_cache}", dir.trim().trim_end_matches('/'));
+        p = dir.join(rest.trim_start_matches('/')).display().to_string();
     }
     let path = PathBuf::from(&p);
     if !p.contains('*') {
@@ -257,11 +309,13 @@ mod tests {
         bins: &'static [&'static str],
         inuse: InUse,
     ) -> Vec<Item> {
-        let ctx = ScanCtx::new(home.to_path_buf(), home.to_path_buf(), inuse);
+        // The built-in rules are exercised through their macOS paths.
+        let ctx = ScanCtx::new(home.to_path_buf(), home.to_path_buf(), inuse).with_os(Os::MacOs);
         let catalog = Catalog {
             rules,
             has_bin: Box::new(move |b| bins.contains(&b)),
             runner: Box::new(|_| anyhow::bail!("no runner in tests")),
+            env: Box::new(|_| None),
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         catalog.scan(&ctx, &tx).unwrap();
@@ -296,11 +350,6 @@ mod tests {
         assert!(rules.len() >= 15);
         for r in rules {
             assert!(!r.source.trim().is_empty(), "{}", r.id);
-            assert!(
-                !r.paths.is_empty() || r.path_cmd.is_some(),
-                "{} has no path",
-                r.id
-            );
         }
     }
 
@@ -483,5 +532,164 @@ mod tests {
         );
         assert!(items[0].safe);
         assert!(items[0].size.is_some_and(|s| s > 0));
+    }
+
+    /// Paths found by scanning `home` as `os`, with `env` as the environment.
+    fn found_on(
+        os: Os,
+        env: &'static [(&'static str, &'static str)],
+        home: &Path,
+        rule: Rule,
+    ) -> Vec<PathBuf> {
+        let ctx =
+            ScanCtx::new(home.to_path_buf(), home.to_path_buf(), InUse::default()).with_os(os);
+        let catalog = Catalog {
+            rules: vec![rule],
+            has_bin: Box::new(|_| false),
+            runner: Box::new(|_| anyhow::bail!("no runner in tests")),
+            env: Box::new(move |key| {
+                env.iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            }),
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        catalog.scan(&ctx, &tx).unwrap();
+        drop(tx);
+        let mut paths: Vec<PathBuf> = rx
+            .iter()
+            .filter_map(|e| match e {
+                ScanEvent::Found(i) => i.path,
+                _ => None,
+            })
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    const PER_PLATFORM: &str = "[[rule]]\nid='p'\ngroup='G'\nlabel='l'\npaths=['~/a']\n\
+        paths_macos=['~/Library/Caches/m']\npaths_linux=['{xdg_cache}/b']\n\
+        paths_windows=['{localappdata}/w']\nsafe=false\nmode='clear'\nsource='s'\n";
+
+    #[test]
+    fn paths_follow_the_platform() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        for dir in ["a", "Library/Caches/m", ".cache/b", "local/w"] {
+            fill(&home.join(dir));
+        }
+        assert_eq!(
+            found_on(Os::Linux, &[], home, rule(PER_PLATFORM)),
+            [home.join(".cache/b"), home.join("a")]
+        );
+        assert_eq!(
+            found_on(Os::MacOs, &[], home, rule(PER_PLATFORM)),
+            [home.join("Library/Caches/m"), home.join("a")]
+        );
+    }
+
+    #[test]
+    fn xdg_cache_home_overrides_the_default() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        fill(&home.join(".cache/b"));
+        let xdg = d.path().join("xdg");
+        fill(&xdg.join("b"));
+        // Leaked on purpose: the environment closure needs a 'static value.
+        let value: &'static str = Box::leak(xdg.to_str().unwrap().to_string().into_boxed_str());
+        let env: &'static [(&str, &str)] = Box::leak(Box::new([("XDG_CACHE_HOME", value)]));
+        assert_eq!(
+            found_on(Os::Linux, env, &home, rule(PER_PLATFORM)),
+            [xdg.join("b")]
+        );
+    }
+
+    #[test]
+    fn a_token_without_a_value_resolves_to_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        fill(&home.join("{localappdata}/w"));
+        fill(&home.join("w"));
+        assert!(found_on(Os::Windows, &[], home, rule(PER_PLATFORM)).is_empty());
+        // An empty or relative value is no better than none.
+        assert!(
+            found_on(
+                Os::Windows,
+                &[("LOCALAPPDATA", "")],
+                home,
+                rule(PER_PLATFORM)
+            )
+            .is_empty()
+        );
+        assert!(
+            found_on(
+                Os::Windows,
+                &[("LOCALAPPDATA", "w")],
+                home,
+                rule(PER_PLATFORM)
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn rule_without_a_path_for_this_platform_emits_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        fill(&d.path().join("Library/Caches/m"));
+        let only_mac = rule(
+            "[[rule]]\nid='p'\ngroup='G'\nlabel='l'\npaths_macos=['~/Library/Caches/m']\n\
+             safe=false\nmode='clear'\nsource='s'\n",
+        );
+        assert!(found_on(Os::Linux, &[], d.path(), only_mac.clone()).is_empty());
+        assert_eq!(found_on(Os::MacOs, &[], d.path(), only_mac).len(), 1);
+    }
+
+    #[test]
+    fn no_rule_reaches_into_library_outside_macos() {
+        for r in load_catalog().unwrap() {
+            for os in [Os::Linux, Os::Windows] {
+                for p in r.paths_for(os) {
+                    assert!(
+                        !p.contains("Library/") && !p.contains("{darwin_cache}"),
+                        "{} reaches {p} on {os:?}",
+                        r.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_platform_path_is_home_relative_or_a_known_token() {
+        const ROOTS: [&str; 5] = [
+            "~/",
+            "{darwin_cache}/",
+            "{xdg_cache}/",
+            "{localappdata}/",
+            "{appdata}/",
+        ];
+        for r in load_catalog().unwrap() {
+            for os in Os::ALL {
+                for p in r.paths_for(os) {
+                    assert!(
+                        ROOTS.iter().any(|root| p.starts_with(root)),
+                        "{}: {p}",
+                        r.id
+                    );
+                    assert!(!p.contains(".."), "{}: {p}", r.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_rule_has_a_path_on_some_platform() {
+        for r in load_catalog().unwrap() {
+            assert!(
+                r.path_cmd.is_some() || Os::ALL.iter().any(|os| r.paths_for(*os).next().is_some()),
+                "{} has no path",
+                r.id
+            );
+        }
     }
 }

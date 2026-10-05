@@ -53,6 +53,8 @@ pub struct ScanCtx {
     pub inuse: InUse,
     /// The system whose rules the scanners follow.
     pub os: Os,
+    /// Mount points at scan time, where the system lists them.
+    pub mounts: Vec<PathBuf>,
     /// Worktree paths already reported by the folder scan.
     pub seen_worktrees: Mutex<HashSet<PathBuf>>,
     worktrees_done: (Mutex<bool>, Condvar),
@@ -66,6 +68,7 @@ impl ScanCtx {
             home,
             inuse,
             os: Os::current(),
+            mounts: crate::platform::mount_points(Os::current()),
             seen_worktrees: Mutex::new(HashSet::new()),
             worktrees_done: (Mutex::new(false), Condvar::new()),
             ids: AtomicU64::new(1),
@@ -113,11 +116,16 @@ pub fn all_scanners(home: &std::path::Path, os: Os) -> Vec<Box<dyn Scanner>> {
         Box::new(worktrees::Worktrees),
         Box::new(worktrees::AgentWorktrees::for_home(home)),
         Box::new(ios::Ios),
-        Box::new(android::Android::detect(home)),
+        Box::new(android::Android::detect(home, os)),
         Box::new(docker::Docker),
         Box::new(xcode::Xcode),
         Box::new(homebrew::Homebrew),
-        Box::new(trash::Trash::for_home(home)),
+        Box::new(trash::Trash::for_os(
+            os,
+            home,
+            &crate::platform::process_env,
+            &|argv| argv.first().is_some_and(|bin| which(bin).is_some()) && run(argv).is_ok(),
+        )),
     ];
     if let Ok(catalog) = catalog::Catalog::load() {
         scanners.push(Box::new(catalog));

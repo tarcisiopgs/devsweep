@@ -2,7 +2,7 @@
 id = "claude-desktop-cache"
 group = "AI tools"
 label = "Claude desktop cache"
-paths = [
+paths_macos = [
   "~/Library/Application Support/Claude/Cache",
   "~/Library/Application Support/Claude/Code Cache",
   "~/Library/Application Support/Claude/GPUCache",
@@ -18,7 +18,7 @@ source = "observed on disk (Electron cache folders)"
 id = "claude-cli-cache"
 group = "AI tools"
 label = "Claude Code cache"
-paths = ["~/Library/Caches/claude-cli-nodejs"]
+paths_macos = ["~/Library/Caches/claude-cli-nodejs"]
 safe = true
 mode = "clear"
 source = "observed on disk"
@@ -27,7 +27,7 @@ source = "observed on disk"
 id = "codex-desktop-cache"
 group = "AI tools"
 label = "Codex desktop cache"
-paths = ["~/Library/Caches/Codex"]
+paths_macos = ["~/Library/Caches/Codex"]
 safe = true
 mode = "clear"
 busy_when = ["Codex"]

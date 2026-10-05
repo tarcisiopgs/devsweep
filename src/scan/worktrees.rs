@@ -416,7 +416,7 @@ impl Scanner for AgentWorktrees {
                 if lock(&ctx.seen_worktrees).contains(&wt) {
                     continue;
                 }
-                let main = match main_repo(&wt) {
+                let main = match main_repo(ctx, &wt) {
                     MainRepo::Found(main) => Some(main),
                     MainRepo::Gone => None,
                     MainRepo::Unknown => {
@@ -466,7 +466,7 @@ enum MainRepo {
 
 /// Owner of a linked worktree. Only a missing `gitdir:` target counts as
 /// gone; any git failure is unknown, never a reason to delete the folder.
-fn main_repo(wt: &Path) -> MainRepo {
+fn main_repo(ctx: &ScanCtx, wt: &Path) -> MainRepo {
     let Ok(dotgit) = std::fs::read_to_string(wt.join(".git")) else {
         return MainRepo::Unknown;
     };
@@ -486,7 +486,7 @@ fn main_repo(wt: &Path) -> MainRepo {
     // or an unmounted volume says nothing about the repository.
     match std::fs::exists(&gitdir) {
         Ok(true) => {}
-        Ok(false) if volume_mounted(&gitdir) => return MainRepo::Gone,
+        Ok(false) if storage_present(ctx, &gitdir) => return MainRepo::Gone,
         _ => return MainRepo::Unknown,
     }
     let Some(common) = git(
@@ -507,17 +507,46 @@ fn main_repo(wt: &Path) -> MainRepo {
     }
 }
 
-/// False when `path` lives on a volume under `/Volumes` that is not mounted.
-fn volume_mounted(path: &Path) -> bool {
-    let mut parts = path.components();
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(std::path::Component::RootDir), Some(v), Some(name))
-            if v.as_os_str() == "Volumes" =>
-        {
-            Path::new("/Volumes").join(name).is_dir()
+/// Whether the place a missing `gitdir` lived in is certainly there, so its
+/// absence means the repository is gone and not merely out of reach.
+///
+/// The closest folder that still exists is the evidence. It has to resolve
+/// (a symlink to an unplugged disk does not), hold something (a mount point
+/// left behind by a disk that is not mounted is empty) and sit on a volume
+/// the system reports as mounted. Anything short of that proves nothing.
+fn storage_present(ctx: &ScanCtx, gitdir: &Path) -> bool {
+    let mut ancestors = gitdir.ancestors().skip(1);
+    let existing = loop {
+        match ancestors.next() {
+            Some(dir) if dir.as_os_str().is_empty() => return false,
+            Some(dir) => match std::fs::symlink_metadata(dir) {
+                Ok(_) => break dir,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            },
+            None => return false,
         }
-        _ => true,
+    };
+    let Ok(missing) = gitdir.strip_prefix(existing) else {
+        return false;
+    };
+    // `..` after a folder that does not exist leads somewhere the system
+    // could not follow either.
+    if missing
+        .components()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return false;
     }
+    let Ok(real) = std::fs::canonicalize(existing) else {
+        return false;
+    };
+    let holds_something =
+        std::fs::read_dir(&real).is_ok_and(|mut entries| entries.next().is_some());
+    holds_something
+        && ctx
+            .os
+            .volume_mounted(&real.join(missing), &ctx.mounts, &|p| p.is_dir())
 }
 
 /// A worktree git could not describe: shown, locked, never removable.
@@ -950,6 +979,127 @@ mod tests {
         assert!(items[0].lock.is_some());
         assert!(!items[0].safe);
         assert!(!matches!(items[0].removal, Removal::RemoveDir(_)));
+    }
+
+    /// An unmounted disk leaves the `gitdir:` target missing without the
+    /// repository being gone: the worktree must never become a folder to
+    /// delete.
+    #[test]
+    fn worktree_of_a_repo_on_an_unmounted_linux_disk_is_unknown_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        let wt = agent_root.join("w1");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            wt.join(".git"),
+            "gitdir: /mnt/devsweep-absent-disk/r/.git/worktrees/w1\n",
+        )
+        .unwrap();
+        let scan = |os| {
+            run_agent(
+                &ctx(&home.join("elsewhere"), &home, InUse::default()).with_os(os),
+                vec![agent_root.clone()],
+            )
+        };
+        let items = scan(crate::platform::Os::Linux);
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].status.contains(&Status::Broken));
+        assert!(items[0].lock.is_some());
+        assert!(!matches!(items[0].removal, Removal::RemoveDir(_)));
+    }
+
+    /// A worktree folder under an agent root whose `.git` file holds `gitdir`.
+    fn orphan(agent_root: &Path, gitdir: &str) -> PathBuf {
+        let wt = agent_root.join("w1");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join(".git"), format!("gitdir: {gitdir}\n")).unwrap();
+        wt
+    }
+
+    fn scan_orphan(home: &Path, agent_root: &Path) -> Item {
+        let mut items = run_agent(
+            &ctx(&home.join("elsewhere"), home, InUse::default()),
+            vec![agent_root.to_path_buf()],
+        );
+        assert_eq!(items.len(), 1);
+        items.remove(0)
+    }
+
+    fn assert_unknown(item: &Item) {
+        assert!(!item.status.contains(&Status::Broken), "{:?}", item.status);
+        assert!(item.lock.is_some());
+        assert!(!matches!(item.removal, Removal::RemoveDir(_)));
+    }
+
+    /// A mount point left empty by a disk that is not mounted (an fstab or
+    /// encrypted volume at `/data`, an sshfs folder in the home folder) is
+    /// no proof that the repository is gone, wherever it is.
+    #[test]
+    fn worktree_of_a_repo_under_an_empty_mount_point_is_unknown_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let mount_point = home.join("data");
+        fs::create_dir_all(&mount_point).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        let gitdir = mount_point.join("r/.git/worktrees/w1");
+        orphan(&agent_root, gitdir.to_str().unwrap());
+        assert_unknown(&scan_orphan(&home, &agent_root));
+    }
+
+    /// `git worktree add --relative-paths` writes a relative `gitdir:`; it
+    /// must be judged by where it leads, not by how it is spelled.
+    #[test]
+    fn relative_gitdir_into_an_empty_mount_point_is_unknown_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        fs::create_dir_all(home.join("data")).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        orphan(&agent_root, "../../../data/r/.git/worktrees/w1");
+        assert_unknown(&scan_orphan(&home, &agent_root));
+    }
+
+    /// A `gitdir:` that walks back up after a missing folder cannot be
+    /// followed, so nothing is known about where it ends.
+    #[test]
+    fn gitdir_with_dots_after_a_missing_folder_is_unknown_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        fs::write(home.join("file"), "x").unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        let gitdir = home.join("missing/../data/r/.git/worktrees/w1");
+        orphan(&agent_root, gitdir.to_str().unwrap());
+        assert_unknown(&scan_orphan(&home, &agent_root));
+    }
+
+    /// A symlink to a disk that is gone dangles: the repository behind it
+    /// may be intact.
+    #[cfg(unix)]
+    #[test]
+    fn gitdir_through_a_dangling_symlink_is_unknown_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        fs::write(home.join("file"), "x").unwrap();
+        std::os::unix::fs::symlink(home.join("unplugged"), home.join("code")).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        let gitdir = home.join("code/r/.git/worktrees/w1");
+        orphan(&agent_root, gitdir.to_str().unwrap());
+        assert_unknown(&scan_orphan(&home, &agent_root));
+    }
+
+    /// The repository was deleted from a folder that still holds other
+    /// things: that folder is certainly there, so the worktree is broken.
+    #[test]
+    fn worktree_of_a_repo_deleted_from_a_folder_in_use_is_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        fs::create_dir_all(home.join("code/other-project")).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        let gitdir = home.join("code/r/.git/worktrees/w1");
+        let wt = orphan(&agent_root, gitdir.to_str().unwrap());
+        let item = scan_orphan(&home, &agent_root);
+        assert_eq!(item.status, vec![Status::Broken]);
+        assert_eq!(item.removal, Removal::RemoveDir(wt));
     }
 
     #[test]

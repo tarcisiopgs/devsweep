@@ -17,6 +17,9 @@ pub fn dir_size(path: &Path) -> u64 {
         .build()
         .filter_map(Result::ok)
         .filter_map(|entry| entry.metadata().ok())
+        // Files only: some filesystems (ext4) charge a block per directory,
+        // and an empty tree must weigh nothing.
+        .filter(|meta| !meta.is_dir())
         .map(|meta| meta.blocks() * 512)
         .sum()
 }
@@ -65,6 +68,17 @@ mod tests {
         fs::write(d.path().join("a/one"), vec![1u8; 10_000]).unwrap();
         fs::write(d.path().join("a/b/two"), vec![1u8; 10_000]).unwrap();
         assert!(dir_size(d.path()) >= 20_000);
+    }
+
+    /// ext4 gives every directory a block of its own; a tree without files
+    /// must still weigh nothing, or empty folders would show up as items.
+    #[test]
+    fn empty_directories_weigh_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("a/b/c")).unwrap();
+        assert_eq!(dir_size(d.path()), 0);
+        fs::write(d.path().join("a/b/c/file"), vec![1u8; 4096]).unwrap();
+        assert!(dir_size(d.path()) >= 4096);
     }
 
     #[test]

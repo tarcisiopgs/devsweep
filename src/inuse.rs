@@ -1,8 +1,16 @@
-//! Which paths have a live process working inside them, from `lsof`.
+//! Which paths have a live process working inside them: from `lsof` on
+//! macOS and from `/proc` on Linux.
+
+pub mod linux;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crate::platform::Os;
+
+/// Why a system this binary does not run on has no snapshot.
+const UNAVAILABLE: &str = "process check is not available on this system";
 
 /// lsof can block on a stale network mount; past this, everything stays locked.
 const LSOF_TIMEOUT: Duration = Duration::from_secs(20);
@@ -120,8 +128,24 @@ impl InUse {
         }
     }
 
-    /// Snapshot of every process cwd.
-    pub fn collect() -> InUse {
+    /// Snapshot of every process cwd, the way `os` exposes it. Asking for a
+    /// system other than the one running fails closed.
+    pub fn collect(os: Os) -> InUse {
+        let parsed = match os {
+            _ if os != Os::current() => InUse::failed(UNAVAILABLE),
+            Os::MacOs => InUse::collect_lsof(),
+            Os::Linux => linux::snapshot(Path::new("/proc"), std::process::id()),
+            Os::Windows => InUse::failed(UNAVAILABLE),
+        };
+        match os.home_dir(&crate::platform::process_env) {
+            Some(home) => parsed.with_home(home),
+            None => parsed,
+        }
+    }
+
+    /// The macOS snapshot: `lsof` for the working directories, `ps` for the
+    /// command lines.
+    fn collect_lsof() -> InUse {
         let output = crate::scan::run_timeout(
             &["lsof", "+c0", "-a", "-d", "cwd", "-Fpcn"],
             None,
@@ -132,14 +156,10 @@ impl InUse {
             Ok(ps) => InUse::from_output(output).with_args(&InUse::parse_ps(&ps)),
             Err(err) => InUse::failed(err.to_string()),
         };
-        let parsed = parsed.excluding(&own_process_chain());
-        match std::env::var_os("HOME") {
-            Some(home) => parsed.with_home(home),
-            None => parsed,
-        }
+        parsed.excluding(&own_process_chain())
     }
 
-    fn failure(&self) -> Option<String> {
+    pub(crate) fn failure(&self) -> Option<String> {
         self.failed
             .as_ref()
             .map(|reason| format!("process check failed: {reason}"))
@@ -316,6 +336,37 @@ mod tests {
     fn empty_lsof_output_counts_as_a_failed_check() {
         let iu = InUse::from_output(Ok(String::new()));
         assert!(iu.lock_for(Path::new("/Users/u/app")).is_some());
+    }
+
+    /// A system this binary cannot inspect is an unknown state, not a free one.
+    #[test]
+    fn collecting_for_another_system_fails_closed() {
+        use crate::platform::Os;
+        let other = Os::ALL.into_iter().find(|os| *os != Os::current()).unwrap();
+        let inuse = InUse::collect(other);
+        assert!(inuse.lock_for(Path::new("/anything")).is_some());
+        assert!(inuse.busy(&["anything"]).is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_snapshot_sees_a_process_working_in_a_folder() {
+        use crate::platform::Os;
+        let d = tempfile::tempdir().unwrap();
+        let dir = std::fs::canonicalize(d.path()).unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .current_dir(&dir)
+            .spawn()
+            .unwrap();
+        let inuse = InUse::collect(Os::Linux);
+        let lock = inuse.lock_for(&dir);
+        let own = inuse.lock_for(&std::env::current_dir().unwrap());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(lock, Some(format!("sleep · PID {}", child.id())));
+        // devsweep and what launched it never lock anything.
+        assert!(own.is_none_or(|l| !l.contains(&format!("PID {}", std::process::id()))));
     }
 
     #[test]

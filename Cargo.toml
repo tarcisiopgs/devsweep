@@ -3,11 +3,11 @@ name = "devsweep"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Find and remove what a developer's Mac accumulates: build artifacts, agent worktrees, simulators, emulators, Docker leftovers and dev caches."
+description = "Find and remove what a developer's machine accumulates: build artifacts, agent worktrees, simulators, emulators, Docker leftovers and dev caches."
 license = "MIT"
 repository = "https://github.com/tarcisiopgs/devsweep"
 homepage = "https://github.com/tarcisiopgs/devsweep"
-keywords = ["cleanup", "disk", "macos", "tui", "developer-tools"]
+keywords = ["cleanup", "disk", "macos", "linux", "tui"]
 categories = ["command-line-utilities"]
 readme = "README.md"
 

@@ -1,6 +1,8 @@
-//! Native macOS notification when a removal finishes.
+//! Desktop notification when a removal finishes.
 
 use std::process::{Command, Stdio};
+
+use crate::platform::Os;
 
 /// `osascript` argv that shows `body` under `title`. Both travel as script
 /// arguments, never inside the AppleScript source, so no quoting is needed.
@@ -21,10 +23,35 @@ pub fn osascript_argv(title: &str, body: &str) -> Vec<String> {
     .collect()
 }
 
+/// The command that shows a desktop notification on `os`, when it has one:
+/// `osascript` on macOS, `notify-send` on Linux when installed. Windows has
+/// no such command; the terminal bell is all it gets.
+pub fn argv(
+    os: Os,
+    has_bin: &dyn Fn(&str) -> bool,
+    title: &str,
+    body: &str,
+) -> Option<Vec<String>> {
+    match os {
+        Os::MacOs => Some(osascript_argv(title, body)),
+        // `--` so a text starting with a dash is never read as an option.
+        Os::Linux if has_bin("notify-send") => Some(
+            ["notify-send", "--", title, body]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        ),
+        Os::Linux | Os::Windows => None,
+    }
+}
+
 /// Post the notification without waiting for it. A missing or failing
-/// `osascript` is ignored: the Done screen already says the same thing.
+/// tool is ignored: the Done screen already says the same thing.
 pub fn post(title: &str, body: &str) {
-    let argv = osascript_argv(title, body);
+    let has_bin = |bin: &str| crate::scan::which(bin).is_some();
+    let Some(argv) = argv(Os::current(), &has_bin, title, body) else {
+        return;
+    };
     let _ = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(Stdio::null())
@@ -45,5 +72,32 @@ mod tests {
         assert_eq!(argv[argv.len() - 1], r#"Freed "1 GB" \ end run"#);
         let script: Vec<&String> = argv.iter().skip(1).step_by(2).take(3).collect();
         assert!(script.iter().all(|l| !l.contains("Freed")));
+    }
+
+    #[test]
+    fn macos_uses_osascript() {
+        assert_eq!(
+            argv(Os::MacOs, &|_| false, "devsweep", "done"),
+            Some(osascript_argv("devsweep", "done"))
+        );
+    }
+
+    #[test]
+    fn linux_uses_notify_send_only_when_installed() {
+        assert_eq!(
+            argv(Os::Linux, &|bin| bin == "notify-send", "devsweep", "done"),
+            Some(vec![
+                "notify-send".to_string(),
+                "--".to_string(),
+                "devsweep".to_string(),
+                "done".to_string()
+            ])
+        );
+        assert_eq!(argv(Os::Linux, &|_| false, "devsweep", "done"), None);
+    }
+
+    #[test]
+    fn windows_posts_nothing() {
+        assert_eq!(argv(Os::Windows, &|_| true, "devsweep", "done"), None);
     }
 }

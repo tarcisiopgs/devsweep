@@ -1,24 +1,26 @@
 {
   "name": "@tarcisiopgs/devsweep",
   "version": "0.0.0",
-  "description": "Find and remove what a developer's Mac accumulates: build artifacts, agent worktrees, simulators, emulators, Docker leftovers and dev caches.",
+  "description": "Find and remove what a developer's machine accumulates: build artifacts, agent worktrees, simulators, emulators, Docker leftovers and dev caches.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tarcisiopgs/devsweep.git"
   },
   "homepage": "https://github.com/tarcisiopgs/devsweep",
-  "keywords": ["cleanup", "disk", "macos", "tui", "node_modules", "worktree", "simulator", "docker"],
+  "keywords": ["cleanup", "disk", "macos", "linux", "tui", "node_modules", "worktree", "simulator", "docker"],
   "bin": {
     "devsweep": "bin/devsweep.js"
   },
   "files": ["bin"],
-  "os": ["darwin"],
+  "os": ["darwin", "linux"],
   "engines": {
     "node": ">=18"
   },
   "optionalDependencies": {
     "devsweep-darwin-arm64": "0.0.0",
-    "devsweep-darwin-x64": "0.0.0"
+    "devsweep-darwin-x64": "0.0.0",
+    "devsweep-linux-arm64": "0.0.0",
+    "devsweep-linux-x64": "0.0.0"
   }
 }

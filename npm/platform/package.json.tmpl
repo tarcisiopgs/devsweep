@@ -1,13 +1,13 @@
 {
-  "name": "devsweep-darwin-${ARCH}",
+  "name": "devsweep-${OS}-${ARCH}",
   "version": "${VERSION}",
-  "description": "devsweep binary for macOS ${ARCH}.",
+  "description": "devsweep binary for ${OS} ${ARCH}.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tarcisiopgs/devsweep.git"
   },
   "files": ["bin"],
-  "os": ["darwin"],
+  "os": ["${OS}"],
   "cpu": ["${ARCH}"]
 }

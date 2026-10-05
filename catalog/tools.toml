@@ -2,12 +2,13 @@
 id = "mise-cache"
 group = "Tools"
 label = "mise cache"
-paths = ["~/Library/Caches/mise"]
+paths_macos = ["~/Library/Caches/mise"]
+paths_linux = ["{xdg_cache}/mise"]
 safe = false
 mode = "clear"
 command = ["mise", "cache", "clear"]
 requires_bin = "mise"
-source = "docs: https://mise.jdx.dev/cli/cache/clear.html"
+source = "docs: https://mise.jdx.dev/cli/cache/clear.html and https://mise.jdx.dev/directories.html"
 
 [[rule]]
 id = "gh-cache"

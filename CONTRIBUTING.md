@@ -11,7 +11,10 @@ Developer tool caches live in `catalog/*.toml`, one file per ecosystem. A rule i
 id = "npm-npx"                 # unique, kebab-case
 group = "JavaScript"           # shown next to the item
 label = "npx cache"            # what the user sees
-paths = ["~/.npm/_npx"]        # `~` = home, `{darwin_cache}` = getconf DARWIN_USER_CACHE_DIR, one `*` allowed
+paths = ["~/.npm/_npx"]        # on every system; `~` = home, one `*` allowed
+# paths_macos = ["~/Library/Caches/pip"]   # only on macOS, added to `paths`
+# paths_linux = ["{xdg_cache}/pip"]        # only on Linux
+# paths_windows = ["{localappdata}/pip/Cache"]  # only on Windows
 safe = true                    # preselected? see below
 mode = "clear"                 # remove | clear | children
 busy_when = ["npm", "npx"]     # a running process with this exact name locks the item
@@ -20,6 +23,17 @@ busy_when = ["npm", "npx"]     # a running process with this exact name locks th
 # path_cmd = ["pnpm", "store", "path"]   # for tools that decide the path at runtime
 source = "docs: https://docs.npmjs.com/cli/commands/npx"
 ```
+
+**Paths per system.** A path that is the same everywhere goes in `paths`; one that only exists on a system goes in `paths_macos`, `paths_linux` or `paths_windows`. A rule with no path for the system it runs on is skipped there. Write paths with `/`. Instead of `~/`, a path can start with one of these tokens:
+
+| Token | Folder |
+|---|---|
+| `{darwin_cache}` | `getconf DARWIN_USER_CACHE_DIR` (macOS) |
+| `{xdg_cache}` | `$XDG_CACHE_HOME`, or `~/.cache` when it is not set |
+| `{localappdata}` | `%LOCALAPPDATA%` (Windows) |
+| `{appdata}` | `%APPDATA%` (Windows) |
+
+Use `{xdg_cache}` only when the tool's documentation says it follows `XDG_CACHE_HOME`; otherwise write the path it documents. The `source` must cover the path of every system the rule lists.
 
 **When is a rule `safe`?** Only when the data regenerates by itself, nothing is lost, and recreating it costs nothing relevant. Download caches (packages, modules, browsers, SDKs) are never `safe`: they regenerate, but the next build downloads everything again. Build caches, logs and temporary files can be.
 
@@ -57,4 +71,4 @@ TUI changes come with `insta` snapshots: run `cargo insta review` and check ever
    gh release create v0.2.0 --generate-notes
    ```
 
-The `Release` workflow checks that the tag matches `Cargo.toml`, attaches the macOS archives to the release and publishes `@tarcisiopgs/devsweep`, `devsweep-darwin-arm64` and `devsweep-darwin-x64` to npm through trusted publishing. No npm token is involved.
+The `Release` workflow checks that the tag matches `Cargo.toml`, attaches the macOS and Linux archives to the release and publishes `@tarcisiopgs/devsweep` and its platform packages (`devsweep-darwin-arm64`, `devsweep-darwin-x64`, `devsweep-linux-arm64`, `devsweep-linux-x64`) to npm through trusted publishing. No npm token is involved.
