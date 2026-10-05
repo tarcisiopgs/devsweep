@@ -23,6 +23,7 @@ pub use crossbeam_channel::Sender;
 use crate::fsutil::dir_size;
 use crate::inuse::InUse;
 use crate::model::{Item, ItemId, SourceId};
+use crate::platform::Os;
 
 #[expect(
     clippy::large_enum_variant,
@@ -50,6 +51,8 @@ pub struct ScanCtx {
     pub target: PathBuf,
     pub home: PathBuf,
     pub inuse: InUse,
+    /// The system whose rules the scanners follow.
+    pub os: Os,
     /// Worktree paths already reported by the folder scan.
     pub seen_worktrees: Mutex<HashSet<PathBuf>>,
     worktrees_done: (Mutex<bool>, Condvar),
@@ -62,10 +65,17 @@ impl ScanCtx {
             target,
             home,
             inuse,
+            os: Os::current(),
             seen_worktrees: Mutex::new(HashSet::new()),
             worktrees_done: (Mutex::new(false), Condvar::new()),
             ids: AtomicU64::new(1),
         }
+    }
+
+    /// Follow another system's rules than the one this binary runs on.
+    pub fn with_os(mut self, os: Os) -> ScanCtx {
+        self.os = os;
+        self
     }
 
     /// Signal that the folder worktree scan finished (or never runs).
@@ -96,8 +106,8 @@ pub trait Scanner: Send + Sync {
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()>;
 }
 
-/// Every scanner that ships with devsweep.
-pub fn all_scanners(home: &std::path::Path) -> Vec<Box<dyn Scanner>> {
+/// Every scanner that ships with devsweep and exists on `os`.
+pub fn all_scanners(home: &std::path::Path, os: Os) -> Vec<Box<dyn Scanner>> {
     let mut scanners: Vec<Box<dyn Scanner>> = vec![
         Box::new(artifacts::Artifacts),
         Box::new(worktrees::Worktrees),
@@ -112,6 +122,7 @@ pub fn all_scanners(home: &std::path::Path) -> Vec<Box<dyn Scanner>> {
     if let Ok(catalog) = catalog::Catalog::load() {
         scanners.push(Box::new(catalog));
     }
+    scanners.retain(|s| os.has_source(s.source()));
     scanners
 }
 
@@ -292,6 +303,26 @@ mod tests {
             PathBuf::from("/tmp"),
             InUse::default(),
         ))
+    }
+
+    #[test]
+    fn scanners_follow_the_platform() {
+        use crate::platform::Os;
+        let sources = |os| -> Vec<SourceId> {
+            all_scanners(std::path::Path::new("/tmp"), os)
+                .iter()
+                .map(|s| s.source())
+                .collect()
+        };
+        let apple = [SourceId::Ios, SourceId::Xcode, SourceId::Homebrew];
+        let mac = sources(Os::MacOs);
+        assert!(apple.iter().all(|s| mac.contains(s)));
+        for os in [Os::Linux, Os::Windows] {
+            let found = sources(os);
+            assert!(apple.iter().all(|s| !found.contains(s)), "{os:?}");
+            assert!(found.contains(&SourceId::Artifacts));
+            assert!(found.contains(&SourceId::Docker));
+        }
     }
 
     fn collect(scanners: Vec<Box<dyn Scanner>>) -> Vec<ScanEvent> {

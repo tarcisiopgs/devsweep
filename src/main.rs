@@ -13,6 +13,7 @@ use devsweep::app::{Action, App, Screen, terminal_name};
 use devsweep::fsutil::disk_free;
 use devsweep::inuse::InUse;
 use devsweep::model::{Item, SourceId};
+use devsweep::platform::{Os, process_env};
 use devsweep::remove::{Guard, RealExecutor, RemoveEvent, default_recheck, run_removals_until};
 use devsweep::scan::worktrees::{AGENT_ROOTS, leftover_branch};
 use devsweep::scan::{ScanCtx, ScanEvent, all_scanners, run, spawn_all};
@@ -39,9 +40,9 @@ fn main() -> anyhow::Result<()> {
         None => std::env::current_dir()?,
     };
     let target = std::fs::canonicalize(&target)?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+    let home = Os::current()
+        .home_dir(&process_env)
+        .ok_or_else(|| anyhow::anyhow!("the home folder is not set"))?;
     let home = std::fs::canonicalize(&home).unwrap_or(home);
 
     // ratatui::init installs a panic hook that restores the terminal.
@@ -53,7 +54,7 @@ fn main() -> anyhow::Result<()> {
 
 /// Start every available scanner; returns their sources and event stream.
 fn start_scan(target: &Path, home: &Path) -> (Vec<SourceId>, Receiver<ScanEvent>) {
-    let scanners: Vec<_> = all_scanners(home)
+    let scanners: Vec<_> = all_scanners(home, Os::current())
         .into_iter()
         .filter(|s| s.available())
         .collect();
@@ -73,23 +74,17 @@ fn start_removal(
     target: &Path,
     home: &Path,
 ) -> (Receiver<RemoveEvent>, Arc<AtomicBool>) {
-    let protected = [
-        "",
-        "Library",
-        "Library/Caches",
-        "Library/Developer",
-        "Library/Logs",
-    ]
-    .iter()
-    .map(|p| home.join(p))
-    .chain(AGENT_ROOTS.iter().map(|r| home.join(r)))
-    .collect();
-    let extra: Vec<PathBuf> = run(&["getconf", "DARWIN_USER_CACHE_DIR"])
-        .ok()
-        .map(|d| PathBuf::from(d.trim()))
-        .filter(|p| p.is_absolute())
+    let os = Os::current();
+    let protected = os
+        .protected_dirs(home, &process_env)
         .into_iter()
+        .chain(AGENT_ROOTS.iter().map(|r| home.join(r)))
         .collect();
+    let darwin_cache = (os == Os::MacOs)
+        .then(|| run(&["getconf", "DARWIN_USER_CACHE_DIR"]).ok())
+        .flatten()
+        .map(|d| PathBuf::from(d.trim()));
+    let extra = os.guard_extra_roots(home, &process_env, darwin_cache);
     let guard = Guard::new(home.to_path_buf(), target.to_path_buf(), protected, extra);
     let (tx, rx) = unbounded();
     let stop = Arc::new(AtomicBool::new(false));
