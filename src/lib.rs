@@ -3,6 +3,7 @@ pub mod fsutil;
 pub mod inuse;
 pub mod model;
 pub mod notify;
+pub mod platform;
 pub mod remove;
 pub mod scan;
 pub mod ui;
