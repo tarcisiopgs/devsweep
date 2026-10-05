@@ -427,6 +427,7 @@ mod tests {
         assert!(sizes[0] >= 50_000);
     }
 
+    #[cfg(unix)]
     #[test]
     fn unreadable_trash_is_an_error_not_an_empty_trash() {
         use std::os::unix::fs::PermissionsExt;
@@ -441,6 +442,7 @@ mod tests {
         assert!(err.contains("permission denied"), "{err}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn unreadable_trash_reports_no_access() {
         // The Full Disk Access prompt hangs on this event, not on the wording

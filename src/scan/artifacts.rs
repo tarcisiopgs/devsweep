@@ -2,7 +2,6 @@
 //! the app builds (`.ipa`, `.apk`, `.aab`) left next to them.
 
 use std::collections::BTreeMap;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -332,12 +331,30 @@ fn tracked(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     if !out.status.success() {
         anyhow::bail!("git ls-files failed in {}", repo.display());
     }
-    Ok(out
-        .stdout
+    git_paths(&out.stdout, repo, &crate::platform::path_from_git_bytes)
+}
+
+/// The paths in a NUL-separated git listing, relative ones resolved against
+/// `repo`. A path `decode` cannot read fails the whole listing: leaving it
+/// out would make git's answer look shorter than it was.
+fn git_paths(
+    stdout: &[u8],
+    repo: &Path,
+    decode: &dyn Fn(&[u8]) -> Option<PathBuf>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    stdout
         .split(|b| *b == 0)
         .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| repo.join(std::ffi::OsStr::from_bytes(chunk)))
-        .collect())
+        .map(|chunk| {
+            let path = decode(chunk)
+                .ok_or_else(|| anyhow::anyhow!("git printed a path that cannot be read"))?;
+            Ok(if path.is_absolute() {
+                path
+            } else {
+                repo.join(path)
+            })
+        })
+        .collect()
 }
 
 /// Keep only the candidates git ignores, asking once per repository. The
@@ -379,15 +396,7 @@ fn check_ignore(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> 
         Some(0) | Some(1) => {}
         _ => anyhow::bail!("git check-ignore failed in {}", repo.display()),
     }
-    Ok(out
-        .stdout
-        .split(|b| *b == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| {
-            let p = PathBuf::from(std::ffi::OsStr::from_bytes(chunk));
-            if p.is_absolute() { p } else { repo.join(p) }
-        })
-        .collect())
+    git_paths(&out.stdout, repo, &crate::platform::path_from_git_bytes)
 }
 
 #[cfg(test)]
@@ -698,6 +707,23 @@ mod tests {
         assert_eq!(items(&ev).len(), 1);
     }
 
+    /// A path git printed that cannot be read back is an answer devsweep
+    /// did not understand: a failure, never a path quietly left out (the
+    /// folder holding it would then look free of tracked files).
+    #[test]
+    fn unreadable_git_path_is_a_failure_not_a_skip() {
+        let repo = Path::new("/r");
+        let refuse_b = |bytes: &[u8]| (bytes != b"b").then(|| PathBuf::from("ok"));
+        assert!(git_paths(b"a\0b\0c\0", repo, &refuse_b).is_err());
+        let accept = |bytes: &[u8]| Some(PathBuf::from(String::from_utf8_lossy(bytes).as_ref()));
+        assert_eq!(
+            git_paths(b"a\0/abs/b\0", repo, &accept).unwrap(),
+            [PathBuf::from("/r/a"), PathBuf::from("/abs/b")]
+        );
+        assert!(git_paths(b"", repo, &accept).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn symlinked_app_build_is_ignored() {
         let d = tempfile::tempdir().unwrap();

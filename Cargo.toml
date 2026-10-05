@@ -39,3 +39,7 @@ expect_used = "warn"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+[target."cfg(windows)".dependencies]
+dunce = "1.0"
+sysinfo = { version = "0.38", default-features = false, features = ["system", "disk"] }

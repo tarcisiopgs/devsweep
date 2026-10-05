@@ -1174,6 +1174,7 @@ mod tests {
         assert_eq!(local.label, "wt");
     }
 
+    #[cfg(unix)]
     #[test]
     fn unreadable_gitdir_is_unknown_not_broken() {
         // A main repo in a folder we cannot read (privacy prompt, unmounted

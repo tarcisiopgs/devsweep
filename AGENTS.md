@@ -20,6 +20,7 @@ cargo insta review                           # accept or reject changed TUI snap
 cargo run -- ~/some/folder                   # run the TUI against a folder
 scripts/test-linux.sh                        # the suite on Linux, in a container, as a regular user (needs Docker)
 scripts/build-linux.sh                       # the static Linux release binary, in the same container
+scripts/check-windows.sh                     # type-check and lint for Windows, in the same container (the Windows suite only runs in CI)
 prek install -t pre-commit -t pre-push       # git hooks: fmt + clippy on commit, tests on push
 ```
 

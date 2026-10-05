@@ -189,6 +189,37 @@ impl Os {
     }
 }
 
+/// A path as git prints it. On Unix a path is its bytes; elsewhere git
+/// prints UTF-8, and bytes that are not UTF-8 name no path at all.
+#[cfg(unix)]
+pub fn path_from_git_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+pub fn path_from_git_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    utf8_path(bytes)
+}
+
+#[cfg(any(not(unix), test))]
+fn utf8_path(bytes: &[u8]) -> Option<PathBuf> {
+    std::str::from_utf8(bytes).ok().map(PathBuf::from)
+}
+
+/// `path` with symlinks resolved. On Windows the plain form (`C:\…`), not
+/// the verbatim one (`\\?\C:\…`) that git and people do not expect.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        dunce::canonicalize(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::canonicalize(path)
+    }
+}
+
 /// The drive (`D:\`) or network share (`\\server\share\`) a Windows path
 /// lives on, read from its text so the rule holds on any system. git writes
 /// these paths with forward slashes.
@@ -535,6 +566,23 @@ mod tests {
         assert_eq!(Os::Windows.script_name("avdmanager"), "avdmanager.bat");
         assert_eq!(Os::Linux.script_name("avdmanager"), "avdmanager");
         assert_eq!(Os::MacOs.script_name("avdmanager"), "avdmanager");
+    }
+
+    #[test]
+    fn git_paths_are_strict_utf8_where_paths_are_not_bytes() {
+        assert_eq!(
+            utf8_path(b"src/caf\xc3\xa9.rs"),
+            Some(PathBuf::from("src/café.rs"))
+        );
+        assert_eq!(utf8_path(b"src/caf\xe9.rs"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_paths_are_raw_bytes_on_unix() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = path_from_git_bytes(b"src/caf\xe9.rs").unwrap();
+        assert_eq!(path.as_os_str().as_bytes(), b"src/caf\xe9.rs");
     }
 
     #[test]

@@ -39,11 +39,11 @@ fn main() -> anyhow::Result<()> {
         Some(p) => p,
         None => std::env::current_dir()?,
     };
-    let target = std::fs::canonicalize(&target)?;
+    let target = devsweep::platform::canonical(&target)?;
     let home = Os::current()
         .home_dir(&process_env)
         .ok_or_else(|| anyhow::anyhow!("the home folder is not set"))?;
-    let home = std::fs::canonicalize(&home).unwrap_or(home);
+    let home = devsweep::platform::canonical(&home).unwrap_or(home);
 
     // ratatui::init installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();

@@ -593,6 +593,7 @@ mod tests {
         assert!(exec.calls.lock().unwrap().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn guard_refuses_a_path_swapped_for_a_symlink() {
         // A cache folder replaced by a link to Documents must not be emptied
@@ -1006,6 +1007,7 @@ mod tests {
         assert!(RealExecutor.command(&["false".into()], None).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn remove_dir_keeps_symlink_target() {
         let (_d, h) = home();
