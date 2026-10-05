@@ -26,6 +26,9 @@ pub enum Empty {
     /// No tool to ask: these folders of the home Trash are deleted, each one
     /// through the guard.
     Folders(Vec<PathBuf>),
+    /// Windows keeps a Recycle Bin per drive behind the shell, not a folder
+    /// to read: PowerShell counts it and empties it.
+    RecycleBin,
 }
 
 impl Trash {
@@ -59,10 +62,9 @@ impl Trash {
                     empty,
                 }
             }
-            // Windows keeps a Recycle Bin, not a folder to read.
             Os::Windows => Trash {
                 roots: Vec::new(),
-                empty: Empty::Folders(Vec::new()),
+                empty: Empty::RecycleBin,
             },
         }
     }
@@ -73,6 +75,87 @@ impl Trash {
             roots,
             empty: Empty::Finder,
         }
+    }
+}
+
+/// How many items the Recycle Bin holds, on every drive, and their size, as
+/// `{"count":N,"size":B}`. The shell's own view of it (folder 10), so no
+/// drive has to be walked and no user id looked up.
+const RECYCLE_BIN_COUNT: &str =
+    "@((New-Object -ComObject Shell.Application).Namespace(10).Items())";
+
+pub const RECYCLE_BIN_QUERY: [&str; 5] = [
+    "powershell",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "$items = @((New-Object -ComObject Shell.Application).Namespace(10).Items()); \
+     $size = ($items | ForEach-Object { $_.ExtendedProperty('System.Size') } | Measure-Object -Sum).Sum; \
+     if ($null -eq $size) { $size = 0 }; \
+     '{\"count\":' + $items.Count + ',\"size\":' + [long]$size + '}'",
+];
+
+/// Empty the Recycle Bin of every drive, then check that it is empty: an
+/// item Windows refused to delete must not be reported as freed.
+fn recycle_bin_removal() -> Removal {
+    let script = format!(
+        "Clear-RecycleBin -Force -ErrorAction SilentlyContinue; \
+         if ({RECYCLE_BIN_COUNT}.Count -gt 0) {{ exit 1 }}"
+    );
+    Removal::Command {
+        argv: ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+            .into_iter()
+            .map(String::from)
+            .chain(std::iter::once(script))
+            .collect(),
+        cwd: None,
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RecycleBin {
+    count: usize,
+    size: Option<u64>,
+}
+
+/// Items and bytes from the output of [`RECYCLE_BIN_QUERY`].
+pub fn parse_recycle_bin(output: &str) -> anyhow::Result<(usize, u64)> {
+    let json = output.trim().trim_start_matches('\u{feff}');
+    let bin: RecycleBin = serde_json::from_str(json)
+        .map_err(|err| anyhow::anyhow!("could not read the Recycle Bin: {err}"))?;
+    Ok((bin.count, bin.size.unwrap_or(0)))
+}
+
+impl Trash {
+    /// The Recycle Bin as one item, from what `query` printed. A query that
+    /// failed, or printed something else, is a failure of the source.
+    pub fn scan_recycle_bin(
+        &self,
+        ctx: &ScanCtx,
+        tx: &Sender<ScanEvent>,
+        query: &dyn Fn() -> anyhow::Result<String>,
+    ) -> anyhow::Result<()> {
+        let (count, bytes) = parse_recycle_bin(&query()?)?;
+        if count == 0 {
+            return Ok(());
+        }
+        let noun = if count == 1 { "item" } else { "items" };
+        let item = Item {
+            id: ctx.next_id(),
+            source: SourceId::Trash,
+            label: "Recycle Bin".into(),
+            path: None,
+            size: Some(bytes),
+            status: vec![Status::Detail(format!("{count} {noun}"))],
+            lock: None,
+            // What is in the Recycle Bin can still be put back.
+            safe: false,
+            removal: recycle_bin_removal(),
+            age_days: None,
+            recheck: crate::model::Recheck::default(),
+        };
+        let _ = tx.send(ScanEvent::Found(item));
+        Ok(())
     }
 }
 
@@ -114,10 +197,16 @@ impl Scanner for Trash {
     }
 
     fn available(&self) -> bool {
-        self.roots.first().is_some_and(|r| r.is_dir())
+        match self.empty {
+            Empty::RecycleBin => crate::scan::which("powershell").is_some(),
+            _ => self.roots.first().is_some_and(|r| r.is_dir()),
+        }
     }
 
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
+        if self.empty == Empty::RecycleBin {
+            return self.scan_recycle_bin(ctx, tx, &|| crate::scan::run(&RECYCLE_BIN_QUERY));
+        }
         let Some(home_trash) = self.roots.first() else {
             return Ok(());
         };
@@ -164,6 +253,7 @@ impl Scanner for Trash {
                     cwd: None,
                 },
                 Empty::Folders(folders) => Removal::RemovePaths(folders.clone()),
+                Empty::RecycleBin => recycle_bin_removal(),
             },
             age_days: None,
             recheck: crate::model::Recheck::default(),
@@ -403,6 +493,100 @@ mod tests {
 
         assert!(outside.path().join("keep").exists());
         assert!(outside.path().join("files/keep").exists());
+    }
+
+    #[test]
+    fn parses_recycle_bin_json() {
+        assert_eq!(
+            parse_recycle_bin("{\"count\":3,\"size\":4096}").unwrap(),
+            (3, 4096)
+        );
+        // PowerShell ends its output with a line break, sometimes after a BOM.
+        assert_eq!(
+            parse_recycle_bin("\u{feff}{\"count\":1,\"size\":10}\r\n").unwrap(),
+            (1, 10)
+        );
+        assert_eq!(
+            parse_recycle_bin("{\"count\":0,\"size\":null}").unwrap(),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn garbage_from_powershell_is_an_error() {
+        assert!(parse_recycle_bin("").is_err());
+        assert!(parse_recycle_bin("Access is denied.").is_err());
+        assert!(parse_recycle_bin("{\"count\":-1,\"size\":0}").is_err());
+        assert!(parse_recycle_bin("{\"size\":10}").is_err());
+    }
+
+    fn scan_recycle_bin(output: anyhow::Result<&str>) -> anyhow::Result<Vec<Item>> {
+        let ctx = ScanCtx::new(PathBuf::from("/w"), PathBuf::from("/h"), InUse::default());
+        let trash = Trash::for_os(Os::Windows, Path::new("/h"), &no_env, &|_| false);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let output = output.map(String::from);
+        trash.scan_recycle_bin(&ctx, &tx, &|| match &output {
+            Ok(out) => Ok(out.clone()),
+            Err(err) => Err(anyhow::anyhow!("{err}")),
+        })?;
+        drop(tx);
+        Ok(rx
+            .iter()
+            .filter_map(|e| match e {
+                ScanEvent::Found(i) => Some(i),
+                _ => None,
+            })
+            .collect())
+    }
+
+    #[test]
+    fn recycle_bin_is_one_item_emptied_by_powershell_and_never_safe() {
+        let items = scan_recycle_bin(Ok("{\"count\":2,\"size\":5000}")).unwrap();
+        assert_eq!(items.len(), 1);
+        let bin = &items[0];
+        assert_eq!(bin.label, "Recycle Bin");
+        assert_eq!(bin.status, vec![Status::Detail("2 items".into())]);
+        assert_eq!(bin.size, Some(5000));
+        assert!(!bin.safe);
+        assert_eq!(bin.path, None);
+        let Removal::Command { argv, cwd: None } = &bin.removal else {
+            panic!("{:?}", bin.removal);
+        };
+        assert_eq!(
+            argv[..4],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+        );
+        assert!(
+            argv[4].starts_with("Clear-RecycleBin -Force"),
+            "{}",
+            argv[4]
+        );
+    }
+
+    #[test]
+    fn empty_recycle_bin_emits_nothing() {
+        assert!(
+            scan_recycle_bin(Ok("{\"count\":0,\"size\":0}"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A query that failed says nothing about the Recycle Bin being empty.
+    #[test]
+    fn failing_recycle_bin_query_is_an_error_not_an_empty_bin() {
+        assert!(scan_recycle_bin(Err(anyhow::anyhow!("powershell failed"))).is_err());
+        assert!(scan_recycle_bin(Ok("not json")).is_err());
+    }
+
+    /// The real query, against the Recycle Bin of the machine running the
+    /// tests: whatever it holds, the answer must be one devsweep can read.
+    #[cfg(windows)]
+    #[test]
+    fn real_recycle_bin_query_parses() {
+        let argv: Vec<&str> = RECYCLE_BIN_QUERY.to_vec();
+        let out = crate::scan::run(&argv).unwrap();
+        parse_recycle_bin(&out).unwrap();
     }
 
     #[test]
