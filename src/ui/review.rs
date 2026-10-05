@@ -129,7 +129,7 @@ pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
                 body.width,
             ));
             lines.push(Line::styled(
-                format!("    {}", item.removal.describe()),
+                format!("    {}", item.removal.describe_for(app.os)),
                 dim(),
             ));
         }
@@ -421,6 +421,7 @@ mod tests {
             PathBuf::from("/Users/u/Workspace"),
             vec![SourceId::Worktrees, SourceId::Docker],
         );
+        a.os = crate::platform::Os::MacOs;
         let wt = Removal::Worktree {
             path: PathBuf::from("/Users/u/.codex/worktrees/glowz-robots"),
             repo: PathBuf::from("/Users/u/Workspace/glowz"),
@@ -467,6 +468,58 @@ mod tests {
     #[test]
     fn snapshot_review_grouped_with_commands() {
         insta::assert_snapshot!(render(&reviewing()).backend());
+    }
+
+    /// On Windows the commands are the ones a PowerShell user would type.
+    #[test]
+    fn snapshot_review_on_windows() {
+        let mut a = App::new(
+            PathBuf::from("C:\\Users\\u\\code"),
+            vec![
+                SourceId::Artifacts,
+                SourceId::Worktrees,
+                SourceId::DevCaches,
+            ],
+        );
+        a.os = crate::platform::Os::Windows;
+        let found = [
+            item(
+                1,
+                SourceId::Artifacts,
+                "my app · node_modules",
+                412_000_000,
+                Removal::RemoveDir(PathBuf::from("C:\\Users\\u\\code\\my app\\node_modules")),
+            ),
+            item(
+                2,
+                SourceId::Worktrees,
+                "codex/glowz-robots",
+                95_000_000,
+                Removal::Worktree {
+                    path: PathBuf::from("C:\\Users\\u\\.codex\\worktrees\\glowz-robots"),
+                    repo: PathBuf::from("C:\\Users\\u\\code\\glowz"),
+                },
+            ),
+            item(
+                3,
+                SourceId::DevCaches,
+                "pip cache",
+                1_623_000_000,
+                Removal::ClearDir(PathBuf::from("C:\\Users\\u\\AppData\\Local\\pip\\Cache")),
+            ),
+        ];
+        for i in found {
+            a.on_scan(ScanEvent::Found(i));
+        }
+        for s in [
+            SourceId::Artifacts,
+            SourceId::Worktrees,
+            SourceId::DevCaches,
+        ] {
+            a.on_scan(ScanEvent::Done(s));
+        }
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        insta::assert_snapshot!(render(&a).backend());
     }
 
     #[test]

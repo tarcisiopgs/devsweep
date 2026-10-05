@@ -65,7 +65,7 @@ pub struct Guard {
 }
 
 fn canon(p: PathBuf) -> PathBuf {
-    std::fs::canonicalize(&p).unwrap_or(p)
+    crate::platform::canonical(&p).unwrap_or(p)
 }
 
 impl Guard {
@@ -98,7 +98,7 @@ impl Guard {
         if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(RemoveError::Refused("symlink"));
         }
-        let real = std::fs::canonicalize(p).map_err(|_| RemoveError::Changed)?;
+        let real = crate::platform::canonical(p).map_err(|_| RemoveError::Changed)?;
         if !self.roots.iter().any(|root| real.starts_with(root)) {
             return Err(RemoveError::Refused("outside allowed folders"));
         }
@@ -385,7 +385,7 @@ mod tests {
 
     fn home() -> (tempfile::TempDir, PathBuf) {
         let d = tempfile::tempdir().unwrap();
-        let p = fs::canonicalize(d.path()).unwrap();
+        let p = crate::platform::canonical(d.path()).unwrap();
         (d, p)
     }
 
@@ -593,6 +593,7 @@ mod tests {
         assert!(exec.calls.lock().unwrap().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn guard_refuses_a_path_swapped_for_a_symlink() {
         // A cache folder replaced by a link to Documents must not be emptied
@@ -675,6 +676,102 @@ mod tests {
         let g = Guard::new(h.clone(), PathBuf::from("/"), vec![], vec![]);
         assert!(g.check(Path::new("/etc")).is_err());
         assert!(g.check(Path::new("/usr/bin")).is_err());
+    }
+
+    /// A guard built from a system's protected folders, as `main` does.
+    fn guard_of(os: crate::platform::Os, home: &Path) -> Guard {
+        let protected = os.protected_dirs(home, &|_| None);
+        for dir in &protected {
+            fs::create_dir_all(dir).unwrap();
+        }
+        Guard::new(home.to_path_buf(), home.join("work"), protected, vec![])
+    }
+
+    #[test]
+    fn guard_refuses_linux_protected_dirs() {
+        let (_d, h) = home();
+        let g = guard_of(crate::platform::Os::Linux, &h);
+        for rel in [
+            ".cache",
+            ".config",
+            ".local",
+            ".local/share",
+            ".local/state",
+        ] {
+            assert_eq!(
+                g.check(&h.join(rel)),
+                Err(RemoveError::Refused("protected folder")),
+                "{rel}"
+            );
+        }
+        // What tools keep inside them is still removable.
+        fs::create_dir_all(h.join(".cache/pip")).unwrap();
+        assert_eq!(g.check(&h.join(".cache/pip")), Ok(()));
+    }
+
+    #[test]
+    fn guard_refuses_windows_protected_dirs() {
+        let (_d, h) = home();
+        let g = guard_of(crate::platform::Os::Windows, &h);
+        for rel in [
+            "AppData",
+            "AppData/Local",
+            "AppData/LocalLow",
+            "AppData/Roaming",
+            "AppData/Local/Temp",
+        ] {
+            assert_eq!(
+                g.check(&h.join(rel)),
+                Err(RemoveError::Refused("protected folder")),
+                "{rel}"
+            );
+        }
+        fs::create_dir_all(h.join("AppData/Local/pip/Cache")).unwrap();
+        assert_eq!(g.check(&h.join("AppData/Local/pip/Cache")), Ok(()));
+    }
+
+    /// A junction is Windows' own way of pointing a folder elsewhere: it is
+    /// refused like a symlink, and removing through it never reaches the
+    /// folder it points at.
+    #[cfg(windows)]
+    #[test]
+    fn guard_refuses_a_junction() {
+        let (_d, h) = home();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), "keep").unwrap();
+        let junction = h.join("link");
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(outside.path())
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        let g = guard_of(crate::platform::Os::Windows, &h);
+        assert_eq!(g.check(&junction), Err(RemoveError::Refused("symlink")));
+        // Even asked directly, the executor removes the junction itself.
+        RealExecutor.remove_dir(&junction).unwrap();
+        assert!(!junction.exists());
+        assert!(outside.path().join("keep").exists());
+    }
+
+    /// The same folder, spelled the plain way and the verbatim way.
+    #[cfg(windows)]
+    #[test]
+    fn guard_accepts_a_verbatim_and_a_plain_path_alike() {
+        let (_d, h) = home();
+        let g = guard_of(crate::platform::Os::Windows, &h);
+        let dir = h.join("work").join("target");
+        fs::create_dir_all(&dir).unwrap();
+        let verbatim = fs::canonicalize(&dir).unwrap();
+        assert!(verbatim.to_string_lossy().starts_with("\\\\?\\"));
+        assert_eq!(g.check(&dir), Ok(()));
+        assert_eq!(g.check(&verbatim), Ok(()));
+        let appdata = fs::canonicalize(h.join("AppData")).unwrap();
+        assert_eq!(
+            g.check(&appdata),
+            Err(RemoveError::Refused("protected folder"))
+        );
     }
 
     /// An extra root is judged by where it resolves: one that turns out to
@@ -991,6 +1088,8 @@ mod tests {
         );
     }
 
+    // `touch` is not a Windows tool.
+    #[cfg(unix)]
     #[test]
     fn command_args_are_not_shell_joined() {
         let (_d, h) = home();
@@ -1006,6 +1105,7 @@ mod tests {
         assert!(RealExecutor.command(&["false".into()], None).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn remove_dir_keeps_symlink_target() {
         let (_d, h) = home();

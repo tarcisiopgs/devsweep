@@ -7,7 +7,7 @@ description = "Find and remove what a developer's machine accumulates: build art
 license = "MIT"
 repository = "https://github.com/tarcisiopgs/devsweep"
 homepage = "https://github.com/tarcisiopgs/devsweep"
-keywords = ["cleanup", "disk", "macos", "linux", "tui"]
+keywords = ["cleanup", "disk", "macos", "linux", "windows"]
 categories = ["command-line-utilities"]
 readme = "README.md"
 
@@ -39,3 +39,7 @@ expect_used = "warn"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+[target."cfg(windows)".dependencies]
+dunce = "1.0"
+sysinfo = { version = "0.38", default-features = false, features = ["system", "disk"] }

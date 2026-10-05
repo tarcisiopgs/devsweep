@@ -23,7 +23,7 @@ label = "Android SDK manager cache"
 paths = ["~/.android/cache"]
 safe = true
 mode = "clear"
-busy_when = ["studio", "sdkmanager"]
+busy_when = ["studio", "studio64", "sdkmanager"]
 source = "observed on disk"
 
 [[rule]]

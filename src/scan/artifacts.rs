@@ -2,7 +2,6 @@
 //! the app builds (`.ipa`, `.apk`, `.aab`) left next to them.
 
 use std::collections::BTreeMap;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -190,9 +189,11 @@ fn is_pruned(path: &Path, ctx: &ScanCtx) -> bool {
     if name == ".git" {
         return true;
     }
-    // Right under the home folder, `Library` and dot-folders hold tools
-    // (global npm, editor extensions, caches), not projects.
-    path.parent() == Some(ctx.home.as_path()) && (name == "Library" || name.starts_with('.'))
+    // Right under the home folder, dot-folders and the folders where this
+    // system installs tools (`Library`, `AppData`) hold programs (global
+    // npm, editors, version managers) and caches, not projects.
+    path.parent() == Some(ctx.home.as_path())
+        && (name.starts_with('.') || ctx.os.skip_at_home().contains(&name))
 }
 
 fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
@@ -332,12 +333,30 @@ fn tracked(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
     if !out.status.success() {
         anyhow::bail!("git ls-files failed in {}", repo.display());
     }
-    Ok(out
-        .stdout
+    git_paths(&out.stdout, repo, &crate::platform::path_from_git_bytes)
+}
+
+/// The paths in a NUL-separated git listing, relative ones resolved against
+/// `repo`. A path `decode` cannot read fails the whole listing: leaving it
+/// out would make git's answer look shorter than it was.
+fn git_paths(
+    stdout: &[u8],
+    repo: &Path,
+    decode: &dyn Fn(&[u8]) -> Option<PathBuf>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    stdout
         .split(|b| *b == 0)
         .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| repo.join(std::ffi::OsStr::from_bytes(chunk)))
-        .collect())
+        .map(|chunk| {
+            let path = decode(chunk)
+                .ok_or_else(|| anyhow::anyhow!("git printed a path that cannot be read"))?;
+            Ok(if path.is_absolute() {
+                path
+            } else {
+                repo.join(path)
+            })
+        })
+        .collect()
 }
 
 /// Keep only the candidates git ignores, asking once per repository. The
@@ -379,15 +398,7 @@ fn check_ignore(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> 
         Some(0) | Some(1) => {}
         _ => anyhow::bail!("git check-ignore failed in {}", repo.display()),
     }
-    Ok(out
-        .stdout
-        .split(|b| *b == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| {
-            let p = PathBuf::from(std::ffi::OsStr::from_bytes(chunk));
-            if p.is_absolute() { p } else { repo.join(p) }
-        })
-        .collect())
+    git_paths(&out.stdout, repo, &crate::platform::path_from_git_bytes)
 }
 
 #[cfg(test)]
@@ -405,7 +416,11 @@ mod tests {
     }
 
     fn scan_with(root: &Path, inuse: InUse) -> Vec<ScanEvent> {
-        let ctx = ScanCtx::new(root.to_path_buf(), root.to_path_buf(), inuse);
+        scan_on(crate::platform::Os::MacOs, root, inuse)
+    }
+
+    fn scan_on(os: crate::platform::Os, root: &Path, inuse: InUse) -> Vec<ScanEvent> {
+        let ctx = ScanCtx::new(root.to_path_buf(), root.to_path_buf(), inuse).with_os(os);
         let (tx, rx) = crossbeam_channel::unbounded();
         Artifacts.scan(&ctx, &tx).unwrap();
         drop(tx);
@@ -553,7 +568,9 @@ mod tests {
         fs::write(d.path().join("a/package.json"), "{}").unwrap();
         mk(d.path(), "a/ios/Pods");
         let ev = scan_with(d.path(), InUse::default());
-        assert_eq!(items(&ev)[0].label, "a · ios/Pods");
+        // The label spells the path the way the system does.
+        let pods = Path::new("ios").join("Pods");
+        assert_eq!(items(&ev)[0].label, format!("a · {}", pods.display()));
     }
 
     #[test]
@@ -578,6 +595,45 @@ mod tests {
         assert_eq!(
             it.removal,
             Removal::RemoveDir(d.path().join("a/node_modules"))
+        );
+    }
+
+    /// Under the home folder, the folders where each system installs tools
+    /// hold their own `node_modules`: global npm packages, editors, version
+    /// managers. Those are programs, never project artifacts.
+    #[test]
+    fn tool_folders_under_home_are_not_projects_on_any_system() {
+        use crate::platform::Os;
+        let d = tempfile::tempdir().unwrap();
+        mk(d.path(), "AppData/Roaming/npm/node_modules");
+        mk(
+            d.path(),
+            "AppData/Local/Programs/editor/resources/app/node_modules",
+        );
+        mk(d.path(), "scoop/apps/nodejs/current/node_modules");
+        mk(d.path(), "Library/x/node_modules");
+        mk(d.path(), ".nvm/versions/node/lib/node_modules");
+        mk(d.path(), "code/z/node_modules");
+        let found = |os| -> Vec<PathBuf> {
+            let mut paths: Vec<PathBuf> = items(&scan_on(os, d.path(), InUse::default()))
+                .iter()
+                .filter_map(|i| i.path.clone())
+                .collect();
+            paths.sort();
+            paths
+        };
+        let project = d.path().join("code/z/node_modules");
+        assert_eq!(
+            found(Os::Windows),
+            [d.path().join("Library/x/node_modules"), project.clone()]
+        );
+        assert!(found(Os::MacOs).contains(&project));
+        assert!(!found(Os::MacOs).contains(&d.path().join("Library/x/node_modules")));
+        assert!(found(Os::Linux).contains(&project));
+        assert!(
+            !found(Os::Linux)
+                .iter()
+                .any(|p| p.starts_with(d.path().join(".nvm")))
         );
     }
 
@@ -634,12 +690,13 @@ mod tests {
         let mut found = items(&ev);
         found.sort_by_key(|i| i.label.clone());
         let labels: Vec<&str> = found.iter().map(|i| i.label.as_str()).collect();
+        let apk = Path::new("out-dir").join("app-release.APK");
         assert_eq!(
             labels,
             [
-                "app · app.aab",
-                "app · build-1.ipa",
-                "app · out-dir/app-release.APK"
+                "app · app.aab".to_string(),
+                "app · build-1.ipa".to_string(),
+                format!("app · {}", apk.display()),
             ]
         );
         let ipa = found[1];
@@ -698,6 +755,23 @@ mod tests {
         assert_eq!(items(&ev).len(), 1);
     }
 
+    /// A path git printed that cannot be read back is an answer devsweep
+    /// did not understand: a failure, never a path quietly left out (the
+    /// folder holding it would then look free of tracked files).
+    #[test]
+    fn unreadable_git_path_is_a_failure_not_a_skip() {
+        let repo = Path::new("/r");
+        let refuse_b = |bytes: &[u8]| (bytes != b"b").then(|| PathBuf::from("ok"));
+        assert!(git_paths(b"a\0b\0c\0", repo, &refuse_b).is_err());
+        let accept = |bytes: &[u8]| Some(PathBuf::from(String::from_utf8_lossy(bytes).as_ref()));
+        assert_eq!(
+            git_paths(b"a\0/abs/b\0", repo, &accept).unwrap(),
+            [PathBuf::from("/r/a"), PathBuf::from("/abs/b")]
+        );
+        assert!(git_paths(b"", repo, &accept).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn symlinked_app_build_is_ignored() {
         let d = tempfile::tempdir().unwrap();

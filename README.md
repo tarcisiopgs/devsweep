@@ -9,7 +9,7 @@ toolchains, Docker and package managers keep accumulating data. devsweep brings
 it into one place: see the size and status of each item, choose what can go,
 and review the removal commands before confirming.
 
-Built with Rust and ratatui. Runs on **macOS and Linux**. MIT licensed.
+Built with Rust and ratatui. Runs on **macOS, Linux and Windows** (Windows is experimental). MIT licensed.
 
 ## Quick start
 
@@ -34,9 +34,21 @@ or build from source with `cargo build --release`.
 |---|---|---|
 | macOS | Apple silicon, Intel | all of them |
 | Linux | x64, arm64 | all except iOS, Xcode and Homebrew, which only exist on macOS |
+| Windows (experimental) | x64, arm64 | the same as Linux |
 
 The Linux binary is statically linked and does not depend on the
 distribution's libc.
+
+**Windows support is experimental.** It passes the same test suite on a
+Windows runner, including the checks that keep junctions and protected folders
+from being removed, but the interface has not yet been reviewed on a real
+Windows machine. Read the review screen with extra care there, and please
+[report](https://github.com/tarcisiopgs/devsweep/issues) what looks wrong.
+
+One limit is known: Windows does not show the working directory of a process
+started as administrator to a terminal that is not. Such a process still locks
+caches by its name (`npm`, `go`…), but not the folder it works in. Run devsweep
+from a terminal with the same privileges as your tools.
 
 ## From scan to cleanup
 
@@ -89,7 +101,7 @@ a prompt when access is missing.
 | Dev tool caches (npm, pnpm, bun, Yarn, pip, uv, Go, Cargo, Gradle, RubyGems, Expo, CocoaPods, Xcode, Clang, Playwright, Claude, Codex…) | Machine | the cache regenerates and costs nothing to rebuild |
 | Xcode device support files and archives (macOS) | Machine | never |
 | Homebrew cleanup (macOS) | Machine | unlocked |
-| The Trash. On macOS Finder empties it, mounted volumes' included. On Linux `gio trash --empty` does when it can reach a trash service; otherwise only the home Trash is emptied | Machine | never |
+| The Trash. On macOS Finder empties it, mounted volumes' included. On Linux `gio trash --empty` does when it can reach a trash service; otherwise only the home Trash is emptied. On Windows the Recycle Bin is emptied with `Clear-RecycleBin` | Machine | never |
 
 **Safe** means: it regenerates by itself, nothing is lost, and recreating it
 costs nothing relevant. Download caches regenerate too, but the next build
@@ -114,8 +126,8 @@ downloads everything again, so they are listed and left for you to decide.
 | `q` / `ctrl-c` | quit; during removal, stop after the current item |
 
 When a removal finishes, devsweep posts a desktop notification with the result:
-always on macOS, and on Linux when `notify-send` is installed. Pass
-`--no-notify` to turn it off.
+always on macOS, and on Linux when `notify-send` is installed. On Windows the
+terminal bell is the only signal. Pass `--no-notify` to turn it off.
 
 ## Scope
 

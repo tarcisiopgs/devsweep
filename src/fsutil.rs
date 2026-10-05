@@ -1,6 +1,5 @@
 //! Disk usage and time helpers.
 
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -20,11 +19,38 @@ pub fn dir_size(path: &Path) -> u64 {
         // Files only: some filesystems (ext4) charge a block per directory,
         // and an empty tree must weigh nothing.
         .filter(|meta| !meta.is_dir())
-        .map(|meta| meta.blocks() * 512)
+        .map(|meta| disk_usage(&meta))
         .sum()
 }
 
+/// Bytes a file takes on disk. Unix counts its blocks, so a sparse file
+/// weighs what it really holds; Windows only offers its length.
+#[cfg(unix)]
+fn disk_usage(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks() * 512
+}
+
+#[cfg(not(unix))]
+fn disk_usage(meta: &std::fs::Metadata) -> u64 {
+    meta.len()
+}
+
+/// Free bytes on the volume holding `path`: the disk whose mount point is
+/// the longest one above it.
+#[cfg(windows)]
+pub fn disk_free(path: &Path) -> Option<u64> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|disk| path.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().as_os_str().len())
+        .map(|disk| disk.available_space())
+}
+
 /// Free bytes on the volume holding `path`, from `df`.
+#[cfg(not(windows))]
 pub fn disk_free(path: &Path) -> Option<u64> {
     let path = path.to_str()?;
     let out = crate::scan::run_timeout(
@@ -81,6 +107,7 @@ mod tests {
         assert!(dir_size(d.path()) >= 4096);
     }
 
+    #[cfg(unix)]
     #[test]
     fn dir_size_does_not_follow_symlinks() {
         let outside = tempfile::tempdir().unwrap();

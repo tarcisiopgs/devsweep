@@ -1232,7 +1232,7 @@ mod tests {
         assert_eq!(*source, SourceId::Branches);
         assert_eq!(items[0].label, "glowz · feat");
         assert_eq!(
-            items[0].removal.describe(),
+            items[0].removal.describe_for(Os::MacOs),
             "(cd /w/glowz) git branch -D feat"
         );
         assert!(!items[0].safe);

@@ -16,6 +16,7 @@ group = "Go"
 label = "Go build cache"
 paths_macos = ["~/Library/Caches/go-build"]
 paths_linux = ["{xdg_cache}/go-build"]
+paths_windows = ["{localappdata}/go-build"]
 safe = true
 mode = "clear"
 command = ["go", "clean", "-cache"]

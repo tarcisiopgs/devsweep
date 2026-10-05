@@ -1,6 +1,8 @@
 //! Core data model shared by scanners, the removal executor and the UI.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::platform::Os;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Section {
@@ -102,8 +104,52 @@ pub enum Removal {
 }
 
 impl Removal {
-    /// Human-readable command shown on the review screen.
-    pub fn describe(&self) -> String {
+    /// Human-readable command shown on the review screen, the way a user
+    /// of `os` would type it: a POSIX shell, or PowerShell on Windows.
+    pub fn describe_for(&self, os: Os) -> String {
+        match os {
+            Os::MacOs | Os::Linux => self.describe_sh(),
+            Os::Windows => self.describe_powershell(),
+        }
+    }
+
+    fn describe_powershell(&self) -> String {
+        let path = |p: &Path| quote_powershell(&p.to_string_lossy());
+        match self {
+            Removal::RemoveDir(p) => format!("Remove-Item -Recurse -Force {}", path(p)),
+            Removal::ClearDir(p) => {
+                // Spelled out, not joined: this text is Windows' own even
+                // when another system renders it.
+                let inside = format!("{}\\*", p.to_string_lossy().trim_end_matches('\\'));
+                format!("Remove-Item -Recurse -Force {}", quote_powershell(&inside))
+            }
+            Removal::RemovePaths(paths) => {
+                let paths: Vec<String> = paths.iter().map(|p| path(p)).collect();
+                format!("Remove-Item -Recurse -Force {}", paths.join(", "))
+            }
+            Removal::Worktree { path: wt, repo } => {
+                format!("cd {}; git worktree remove {}", path(repo), path(wt))
+            }
+            Removal::Command { argv, cwd } => {
+                let cmd = argv
+                    .iter()
+                    .map(
+                        |arg| match arg.chars().any(|c| c.is_whitespace() || c == '\'') {
+                            true => quote_powershell(arg),
+                            false => arg.clone(),
+                        },
+                    )
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                match cwd {
+                    Some(dir) => format!("cd {}; {cmd}", path(dir)),
+                    None => cmd,
+                }
+            }
+        }
+    }
+
+    fn describe_sh(&self) -> String {
         match self {
             Removal::RemoveDir(p) => format!("rm -rf {}", quote(&p.to_string_lossy())),
             Removal::ClearDir(p) => format!("rm -rf {}/*", quote(&p.to_string_lossy())),
@@ -126,6 +172,11 @@ impl Removal {
             }
         }
     }
+}
+
+/// PowerShell quotes with single quotes, and a single quote inside is doubled.
+fn quote_powershell(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
 }
 
 fn quote(s: &str) -> String {
@@ -222,7 +273,6 @@ pub fn format_size_long(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn item() -> Item {
         Item {
@@ -275,7 +325,69 @@ mod tests {
             argv: vec!["rm".into(), "/a b".into()],
             cwd: None,
         };
-        assert_eq!(r.describe(), "rm '/a b'");
+        assert_eq!(r.describe_for(Os::MacOs), "rm '/a b'");
+        assert_eq!(r.describe_for(Os::Linux), "rm '/a b'");
+    }
+
+    #[test]
+    fn unix_describes_removals_as_rm() {
+        for os in [Os::MacOs, Os::Linux] {
+            assert_eq!(
+                Removal::RemoveDir("/a/b c".into()).describe_for(os),
+                "rm -rf '/a/b c'"
+            );
+            assert_eq!(
+                Removal::ClearDir("/a/b".into()).describe_for(os),
+                "rm -rf /a/b/*"
+            );
+        }
+    }
+
+    /// The review shows what a Windows user could type: PowerShell, with
+    /// its own quoting (a single quote is doubled, never backslashed).
+    #[test]
+    fn windows_describes_removals_as_powershell() {
+        let os = Os::Windows;
+        assert_eq!(
+            Removal::RemoveDir("C:\\Users\\u\\my app\\node_modules".into()).describe_for(os),
+            "Remove-Item -Recurse -Force 'C:\\Users\\u\\my app\\node_modules'"
+        );
+        assert_eq!(
+            Removal::RemoveDir("C:\\it's\\target".into()).describe_for(os),
+            "Remove-Item -Recurse -Force 'C:\\it''s\\target'"
+        );
+        assert_eq!(
+            Removal::ClearDir("C:\\cache".into()).describe_for(os),
+            "Remove-Item -Recurse -Force 'C:\\cache\\*'"
+        );
+        assert_eq!(
+            Removal::RemovePaths(vec!["C:\\a".into(), "C:\\b c".into()]).describe_for(os),
+            "Remove-Item -Recurse -Force 'C:\\a', 'C:\\b c'"
+        );
+        assert_eq!(
+            Removal::Worktree {
+                path: "C:\\wt".into(),
+                repo: "C:\\my repo".into()
+            }
+            .describe_for(os),
+            "cd 'C:\\my repo'; git worktree remove 'C:\\wt'"
+        );
+        assert_eq!(
+            Removal::Command {
+                argv: vec!["docker".into(), "volume".into(), "rm".into(), "a b".into()],
+                cwd: None
+            }
+            .describe_for(os),
+            "docker volume rm 'a b'"
+        );
+        assert_eq!(
+            Removal::Command {
+                argv: vec!["git".into(), "branch".into(), "-D".into(), "feat".into()],
+                cwd: Some("C:\\r".into())
+            }
+            .describe_for(os),
+            "cd 'C:\\r'; git branch -D feat"
+        );
     }
 
     #[test]

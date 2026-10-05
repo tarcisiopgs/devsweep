@@ -170,6 +170,26 @@ impl Os {
         }
     }
 
+    /// File names a command may have on disk. Windows finds `npm` as
+    /// `npm.cmd` and `git` as `git.exe`: one name per extension in
+    /// `PATHEXT`, unless the command already carries its own.
+    pub fn exe_names(self, bin: &str, pathext: Option<&str>) -> Vec<String> {
+        const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+        match self {
+            Os::MacOs | Os::Linux => vec![bin.to_string()],
+            Os::Windows if Path::new(bin).extension().is_some() => vec![bin.to_string()],
+            Os::Windows => {
+                let extensions = pathext.filter(|list| !list.trim().is_empty());
+                extensions
+                    .unwrap_or(DEFAULT_PATHEXT)
+                    .split(';')
+                    .filter(|ext| !ext.is_empty())
+                    .map(|ext| format!("{bin}{ext}"))
+                    .collect()
+            }
+        }
+    }
+
     /// File name of a tool an SDK ships as a script: a batch file on Windows.
     pub fn script_name(self, base: &str) -> String {
         match self {
@@ -178,14 +198,56 @@ impl Os {
         }
     }
 
-    /// Folders directly inside the home folder that the repository walk
-    /// does not enter.
+    /// Folders directly inside the home folder that hold tools and their
+    /// data, not projects: neither the repository walk nor the artifact walk
+    /// enters them.
     pub fn skip_at_home(self) -> &'static [&'static str] {
         match self {
             Os::MacOs => &["Library", ".Trash"],
             Os::Linux => &[".cache"],
-            Os::Windows => &["AppData"],
+            Os::Windows => &["AppData", "scoop"],
         }
+    }
+}
+
+/// The first file in `dirs` carrying one of `names` ([`Os::exe_names`]).
+pub fn find_executable(
+    dirs: impl IntoIterator<Item = PathBuf>,
+    names: &[String],
+) -> Option<PathBuf> {
+    dirs.into_iter()
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .find(|candidate| candidate.is_file())
+}
+
+/// A path as git prints it. On Unix a path is its bytes; elsewhere git
+/// prints UTF-8, and bytes that are not UTF-8 name no path at all.
+#[cfg(unix)]
+pub fn path_from_git_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+pub fn path_from_git_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    utf8_path(bytes)
+}
+
+#[cfg(any(not(unix), test))]
+fn utf8_path(bytes: &[u8]) -> Option<PathBuf> {
+    std::str::from_utf8(bytes).ok().map(PathBuf::from)
+}
+
+/// `path` with symlinks resolved. On Windows the plain form (`C:\…`), not
+/// the verbatim one (`\\?\C:\…`) that git and people do not expect.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        dunce::canonicalize(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::canonicalize(path)
     }
 }
 
@@ -371,6 +433,9 @@ mod tests {
         assert!(dirs.contains(&home.to_path_buf()));
     }
 
+    // Linux and macOS rules over their own absolute paths, which are not
+    // absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn extra_root_above_home_is_dropped() {
         let home = Path::new("/home/u");
@@ -400,6 +465,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn macos_extra_root_is_the_darwin_cache_dir() {
         let home = Path::new("/Users/u");
@@ -538,9 +604,70 @@ mod tests {
     }
 
     #[test]
+    fn git_paths_are_strict_utf8_where_paths_are_not_bytes() {
+        assert_eq!(
+            utf8_path(b"src/caf\xc3\xa9.rs"),
+            Some(PathBuf::from("src/café.rs"))
+        );
+        assert_eq!(utf8_path(b"src/caf\xe9.rs"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_paths_are_raw_bytes_on_unix() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = path_from_git_bytes(b"src/caf\xe9.rs").unwrap();
+        assert_eq!(path.as_os_str().as_bytes(), b"src/caf\xe9.rs");
+    }
+
+    #[test]
+    fn windows_tries_pathext_extensions() {
+        let names = Os::Windows.exe_names("npm", Some(".COM;.EXE;.BAT;.CMD"));
+        assert_eq!(names, ["npm.COM", "npm.EXE", "npm.BAT", "npm.CMD"]);
+        // Without PATHEXT, the system's own default list.
+        assert_eq!(Os::Windows.exe_names("npm", None), names);
+        assert_eq!(Os::Windows.exe_names("npm", Some("")), names);
+        assert_eq!(
+            Os::Windows.exe_names("git", Some(".EXE;;.CMD")),
+            ["git.EXE", "git.CMD"]
+        );
+    }
+
+    #[test]
+    fn windows_keeps_an_explicit_extension() {
+        assert_eq!(
+            Os::Windows.exe_names("avdmanager.bat", Some(".EXE")),
+            ["avdmanager.bat"]
+        );
+    }
+
+    #[test]
+    fn unix_uses_the_name_as_is() {
+        for os in [Os::MacOs, Os::Linux] {
+            assert_eq!(os.exe_names("npm", Some(".EXE;.CMD")), ["npm"]);
+        }
+    }
+
+    #[test]
+    fn executable_is_found_by_any_of_its_names() {
+        let d = tempfile::tempdir().unwrap();
+        let (empty, bin) = (d.path().join("empty"), d.path().join("bin"));
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(bin.join("npm.EXE")).unwrap();
+        std::fs::write(bin.join("npm.CMD"), "").unwrap();
+        let names = Os::Windows.exe_names("npm", Some(".EXE;.CMD"));
+        // A folder with the right name is not an executable.
+        assert_eq!(
+            find_executable([empty.clone(), bin.clone()], &names),
+            Some(bin.join("npm.CMD"))
+        );
+        assert_eq!(find_executable([empty], &names), None);
+    }
+
+    #[test]
     fn home_folders_skipped_by_the_walk() {
         assert_eq!(Os::MacOs.skip_at_home(), ["Library", ".Trash"]);
         assert_eq!(Os::Linux.skip_at_home(), [".cache"]);
-        assert_eq!(Os::Windows.skip_at_home(), ["AppData"]);
+        assert_eq!(Os::Windows.skip_at_home(), ["AppData", "scoop"]);
     }
 }

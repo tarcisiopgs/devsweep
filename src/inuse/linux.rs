@@ -17,7 +17,7 @@ pub fn from_proc(root: &Path) -> InUse {
         Ok(entries) => entries,
         Err(err) => return InUse::failed(format!("cannot read {}: {err}", root.display())),
     };
-    let mut procs: Vec<Proc> = entries
+    let procs: Vec<Proc> = entries
         .flatten()
         .filter_map(|entry| {
             let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
@@ -35,6 +35,7 @@ pub fn from_proc(root: &Path) -> InUse {
                 name,
                 cwd: without_deleted_mark(cwd),
                 args,
+                argv: Vec::new(),
             })
         })
         .collect();
@@ -44,11 +45,7 @@ pub fn from_proc(root: &Path) -> InUse {
             root.display()
         ));
     }
-    procs.sort_by_key(|p| p.pid);
-    InUse {
-        procs,
-        ..InUse::default()
-    }
+    InUse::from_procs(procs)
 }
 
 /// The snapshot devsweep works with: every process under `root` except

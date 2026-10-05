@@ -3,31 +3,34 @@ id = "npm-cacache"
 group = "JavaScript"
 label = "npm cache"
 paths = ["~/.npm/_cacache"]
+paths_windows = ["{localappdata}/npm-cache/_cacache"]
 safe = true
 mode = "clear"
 command = ["npm", "cache", "verify"]
 requires_bin = "npm"
 busy_when = ["npm", "npx"]
-source = "docs: https://docs.npmjs.com/cli/commands/npm-cache"
+source = "docs: https://docs.npmjs.com/cli/commands/npm-cache and https://docs.npmjs.com/cli/using-npm/config#cache"
 
 [[rule]]
 id = "npm-npx"
 group = "JavaScript"
 label = "npx cache"
 paths = ["~/.npm/_npx"]
+paths_windows = ["{localappdata}/npm-cache/_npx"]
 safe = true
 mode = "clear"
 busy_when = ["npm", "npx"]
-source = "docs: https://docs.npmjs.com/cli/commands/npx"
+source = "docs: https://docs.npmjs.com/cli/commands/npx and https://docs.npmjs.com/cli/using-npm/config#cache"
 
 [[rule]]
 id = "npm-logs"
 group = "JavaScript"
 label = "npm logs"
 paths = ["~/.npm/_logs"]
+paths_windows = ["{localappdata}/npm-cache/_logs"]
 safe = true
 mode = "clear"
-source = "docs: https://docs.npmjs.com/cli/using-npm/logging"
+source = "docs: https://docs.npmjs.com/cli/using-npm/logging and https://docs.npmjs.com/cli/using-npm/config#cache"
 
 [[rule]]
 id = "pnpm-store"
@@ -89,6 +92,7 @@ group = "JavaScript"
 label = "Playwright browsers"
 paths_macos = ["~/Library/Caches/ms-playwright"]
 paths_linux = ["~/.cache/ms-playwright"]
+paths_windows = ["~/AppData/Local/ms-playwright"]
 safe = false
 mode = "clear"
 source = "docs: https://playwright.dev/docs/browsers#managing-browser-binaries"
