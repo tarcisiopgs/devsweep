@@ -370,7 +370,7 @@ fn find_repos(ctx: &ScanCtx) -> Vec<PathBuf> {
                 let at_home = path.parent() == Some(ctx.home.as_path());
                 if name == ".git"
                     || classify(path).is_some()
-                    || (at_home && (name == "Library" || name == ".Trash"))
+                    || (at_home && ctx.os.skip_at_home().contains(&name))
                 {
                     return WalkState::Skip;
                 }
@@ -640,6 +640,30 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn home_folders_skipped_follow_the_platform() {
+        use crate::platform::Os;
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        for folder in ["Library", ".cache"] {
+            let r = home.join(folder).join("r");
+            repo(&r);
+            let wt = home.join(folder).join("wt");
+            git(
+                &r,
+                &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "feat"],
+            );
+        }
+        let found = |os| -> Vec<PathBuf> {
+            run_folder(&ctx(&home, &home, InUse::default()).with_os(os))
+                .into_iter()
+                .filter_map(|i| i.path)
+                .collect()
+        };
+        assert_eq!(found(Os::Linux), [home.join("Library/wt")]);
+        assert_eq!(found(Os::MacOs), [home.join(".cache/wt")]);
     }
 
     /// A repo under `target/r` with one worktree at `target/wt`.
