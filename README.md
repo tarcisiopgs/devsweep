@@ -45,6 +45,11 @@ from being removed, but the interface has not yet been reviewed on a real
 Windows machine. Read the review screen with extra care there, and please
 [report](https://github.com/tarcisiopgs/devsweep/issues) what looks wrong.
 
+One limit is known: Windows does not show the working directory of a process
+started as administrator to a terminal that is not. Such a process still locks
+caches by its name (`npm`, `go`…), but not the folder it works in. Run devsweep
+from a terminal with the same privileges as your tools.
+
 ## From scan to cleanup
 
 1. **Scan.** Project artifacts and repository worktrees appear under **This

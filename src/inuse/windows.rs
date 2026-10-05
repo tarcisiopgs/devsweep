@@ -29,7 +29,13 @@ pub fn collect() -> InUse {
         .map(|(pid, process)| Seen {
             pid: pid.as_u32(),
             name: process.name().to_string_lossy().into_owned(),
-            cwd: process.cwd().map(|cwd| cwd.to_path_buf()),
+            // A process reports the folder as it was given: through a
+            // junction, a `subst` drive, a short name. Items are known by
+            // their resolved path, so the comparison needs this one resolved
+            // too. A folder that no longer resolves keeps its spelling.
+            cwd: process
+                .cwd()
+                .map(|cwd| dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())),
             argv: process
                 .cmd()
                 .iter()
