@@ -10,8 +10,8 @@ const supported = {
   "darwin-x64": "devsweep-darwin-x64",
   "linux-arm64": "devsweep-linux-arm64",
   "linux-x64": "devsweep-linux-x64",
-  "win32-arm64": "devsweep-win32-arm64",
-  "win32-x64": "devsweep-win32-x64",
+  "win32-arm64": "@tarcisiopgs/devsweep-win32-arm64",
+  "win32-x64": "@tarcisiopgs/devsweep-win32-x64",
 };
 const system = `${process.platform}-${process.arch}`;
 const pkg = supported[system];
