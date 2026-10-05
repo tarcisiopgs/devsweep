@@ -124,7 +124,7 @@ pub fn all_scanners(home: &std::path::Path, os: Os) -> Vec<Box<dyn Scanner>> {
             os,
             home,
             &crate::platform::process_env,
-            &|bin| which(bin).is_some(),
+            &|argv| argv.first().is_some_and(|bin| which(bin).is_some()) && run(argv).is_ok(),
         )),
     ];
     if let Ok(catalog) = catalog::Catalog::load() {

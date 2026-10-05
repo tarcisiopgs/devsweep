@@ -89,7 +89,7 @@ a prompt when access is missing.
 | Dev tool caches (npm, pnpm, bun, Yarn, pip, uv, Go, Cargo, Gradle, RubyGems, Expo, CocoaPods, Xcode, Clang, Playwright, Claude, Codex…) | Machine | the cache regenerates and costs nothing to rebuild |
 | Xcode device support files and archives (macOS) | Machine | never |
 | Homebrew cleanup (macOS) | Machine | unlocked |
-| The Trash. On macOS Finder empties it, mounted volumes' included. On Linux `gio trash --empty` does; without `gio`, only the home Trash is emptied | Machine | never |
+| The Trash. On macOS Finder empties it, mounted volumes' included. On Linux `gio trash --empty` does when it can reach a trash service; otherwise only the home Trash is emptied | Machine | never |
 
 **Safe** means: it regenerates by itself, nothing is lost, and recreating it
 costs nothing relevant. Download caches regenerate too, but the next build

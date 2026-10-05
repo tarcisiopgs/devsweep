@@ -78,10 +78,13 @@ impl Guard {
         let (home, target) = (canon(home), canon(target));
         // A target above the home folder (`/`, `/Users`) must not widen the roots.
         let target = (!home.starts_with(&target)).then_some(target);
-        let roots: Vec<PathBuf> = std::iter::once(home)
-            .chain(target)
-            .chain(extra_roots.into_iter().map(canon))
+        // The same goes for an extra root, judged by where it resolves.
+        let extra: Vec<PathBuf> = extra_roots
+            .into_iter()
+            .map(canon)
+            .filter(|root| !home.starts_with(root))
             .collect();
+        let roots: Vec<PathBuf> = std::iter::once(home).chain(target).chain(extra).collect();
         let protected = protected.into_iter().map(canon).collect();
         Guard { roots, protected }
     }
@@ -672,6 +675,34 @@ mod tests {
         let g = Guard::new(h.clone(), PathBuf::from("/"), vec![], vec![]);
         assert!(g.check(Path::new("/etc")).is_err());
         assert!(g.check(Path::new("/usr/bin")).is_err());
+    }
+
+    /// An extra root is judged by where it resolves: one that turns out to
+    /// be the home folder or above it (`$HOME/..`) must not widen the guard,
+    /// like a scan target above the home folder does not.
+    #[test]
+    fn extra_root_that_resolves_above_home_is_ignored() {
+        let (_d, base) = home();
+        let h = base.join("home");
+        fs::create_dir_all(&h).unwrap();
+        let sibling = base.join("sibling/cache");
+        fs::create_dir_all(&sibling).unwrap();
+        for extra in [h.join(".."), h.join("."), PathBuf::from("/")] {
+            let g = Guard::new(h.clone(), h.join("work"), vec![], vec![extra.clone()]);
+            assert_eq!(
+                g.check(&sibling),
+                Err(RemoveError::Refused("outside allowed folders")),
+                "{extra:?}"
+            );
+        }
+        // A real root elsewhere still counts.
+        let g = Guard::new(
+            h.clone(),
+            h.join("work"),
+            vec![],
+            vec![sibling.parent().unwrap().to_path_buf()],
+        );
+        assert_eq!(g.check(&sibling), Ok(()));
     }
 
     #[test]

@@ -30,7 +30,8 @@ pub enum Empty {
 
 impl Trash {
     /// The Trash of `os`, for the user whose home folder is `home`.
-    pub fn for_os(os: Os, home: &Path, env: Env, has_bin: &dyn Fn(&str) -> bool) -> Trash {
+    /// `succeeds` runs a command and tells whether it worked.
+    pub fn for_os(os: Os, home: &Path, env: Env, succeeds: &dyn Fn(&[&str]) -> bool) -> Trash {
         match os {
             Os::MacOs => Trash::finder(finder_roots(home)),
             Os::Linux => {
@@ -41,7 +42,10 @@ impl Trash {
                     .unwrap_or_else(|| home.join(".local/share"));
                 let trash = data.join("Trash");
                 let files = trash.join("files");
-                let empty = if has_bin("gio") {
+                // gio is installed on servers, containers and WSL where no
+                // trash service runs; there `gio trash --empty` exits 0 and
+                // deletes nothing. A gio that can list the Trash can empty it.
+                let empty = if succeeds(&["gio", "trash", "--list"]) {
                     Empty::Gio
                 } else {
                     let info = trash.join("info");
@@ -167,7 +171,7 @@ impl Scanner for Trash {
         let id = item.id;
         let _ = tx.send(ScanEvent::Found(item));
         if matches!(self.empty, Empty::Folders(_)) {
-            let note = "Trash folders on other disks are left alone (gio is not installed)";
+            let note = "Trash folders on other disks are left alone (no working gio)";
             let _ = tx.send(ScanEvent::Note(SourceId::Trash, note.into()));
         }
         let (roots, tx) = (self.roots.clone(), tx.clone());
@@ -247,7 +251,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let trash = linux_trash(d.path());
         fs::write(trash.join("files/second"), "x").unwrap();
-        let found = Trash::for_os(Os::Linux, d.path(), &no_env, &|bin| bin == "gio");
+        let found = Trash::for_os(Os::Linux, d.path(), &no_env, &|argv| argv[0] == "gio");
         assert!(found.available());
         let (items, sizes) = scan_linux(d.path(), &found);
         assert_eq!(items.len(), 1);
@@ -261,6 +265,26 @@ mod tests {
             }
         );
         assert!(sizes[0] >= 20_000);
+    }
+
+    /// `gio` is installed on servers, containers and WSL where no trash
+    /// service runs: `gio trash --empty` then exits 0 and deletes nothing.
+    /// Only a gio that can list the Trash is trusted to empty it.
+    #[test]
+    fn gio_that_cannot_list_the_trash_is_not_trusted() {
+        let d = tempfile::tempdir().unwrap();
+        let trash = linux_trash(d.path());
+        let asked = std::sync::Mutex::new(Vec::new());
+        let probe = |argv: &[&str]| {
+            asked.lock().unwrap().push(argv.join(" "));
+            false
+        };
+        let found = Trash::for_os(Os::Linux, d.path(), &no_env, &probe);
+        assert_eq!(*asked.lock().unwrap(), ["gio trash --list"]);
+        assert_eq!(
+            found.empty,
+            Empty::Folders(vec![trash.join("files"), trash.join("info")])
+        );
     }
 
     #[test]
@@ -300,7 +324,7 @@ mod tests {
         };
         assert_eq!(
             notes(false),
-            ["Trash folders on other disks are left alone (gio is not installed)"]
+            ["Trash folders on other disks are left alone (no working gio)"]
         );
         assert!(notes(true).is_empty());
     }

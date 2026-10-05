@@ -51,6 +51,26 @@ pub fn from_proc(root: &Path) -> InUse {
     }
 }
 
+/// The snapshot devsweep works with: every process under `root` except
+/// `own_pid` and its ancestors, which sit in the scanned folder and must
+/// never lock it. devsweep can always read its own working directory, so
+/// seeing nobody else's means the others are hidden (a restricted `/proc`),
+/// not that nothing runs: that fails closed too.
+pub fn snapshot(root: &Path, own_pid: u32) -> InUse {
+    let all = from_proc(root);
+    if all.failed.is_some() {
+        return all;
+    }
+    let others = all.excluding(&parent_chain(root, own_pid));
+    if others.is_empty() {
+        return InUse::failed(format!(
+            "{} shows no working directory of another process",
+            root.display()
+        ));
+    }
+    others
+}
+
 /// `cmdline` separates arguments with NUL; one line with spaces, like `ps`.
 fn command_line(bytes: &[u8]) -> String {
     bytes
@@ -200,6 +220,38 @@ mod tests {
                 .busy(&["chrome_crashpad_handler"])
                 .is_some()
         );
+    }
+
+    /// devsweep can always read its own working directory, so a `/proc`
+    /// that hides everybody else's still shows a few: its own chain. That
+    /// is no evidence that nothing else is running.
+    #[test]
+    fn seeing_only_its_own_chain_locks_everything() {
+        let d = tempfile::tempdir().unwrap();
+        let cwd = d.path().join("w");
+        process(d.path(), 300, Some(&cwd), "devsweep", b"devsweep\0");
+        stat(d.path(), 300, "devsweep", 200);
+        process(d.path(), 200, Some(&cwd), "bash", b"bash\0");
+        stat(d.path(), 200, "bash", 1);
+        process(d.path(), 400, None, "node", b"node\0");
+        let inuse = snapshot(d.path(), 300);
+        let lock = inuse.lock_for(Path::new("/anything")).unwrap();
+        assert!(lock.starts_with("process check failed"), "{lock}");
+        assert!(inuse.busy(&["anything"]).is_some());
+    }
+
+    #[test]
+    fn snapshot_leaves_its_own_chain_out() {
+        let d = tempfile::tempdir().unwrap();
+        let (own, other) = (d.path().join("own"), d.path().join("other"));
+        process(d.path(), 300, Some(&own), "devsweep", b"devsweep\0");
+        stat(d.path(), 300, "devsweep", 200);
+        process(d.path(), 200, Some(&own), "bash", b"bash\0");
+        stat(d.path(), 200, "bash", 1);
+        process(d.path(), 101, Some(&other), "node", b"node\0");
+        let inuse = snapshot(d.path(), 300);
+        assert_eq!(inuse.lock_for(&own), None);
+        assert_eq!(inuse.lock_for(&other).as_deref(), Some("node · PID 101"));
     }
 
     #[test]

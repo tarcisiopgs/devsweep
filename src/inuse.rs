@@ -134,10 +134,7 @@ impl InUse {
         let parsed = match os {
             _ if os != Os::current() => InUse::failed(UNAVAILABLE),
             Os::MacOs => InUse::collect_lsof(),
-            Os::Linux => {
-                let proc = Path::new("/proc");
-                linux::from_proc(proc).excluding(&linux::parent_chain(proc, std::process::id()))
-            }
+            Os::Linux => linux::snapshot(Path::new("/proc"), std::process::id()),
             Os::Windows => InUse::failed(UNAVAILABLE),
         };
         match os.home_dir(&crate::platform::process_env) {
