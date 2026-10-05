@@ -18,6 +18,7 @@ cargo clippy --all-targets -- -D warnings    # must be clean, CI enforces it
 cargo fmt                                    # CI runs cargo fmt --check
 cargo insta review                           # accept or reject changed TUI snapshots
 cargo run -- ~/some/folder                   # run the TUI against a folder
+scripts/test-linux.sh                        # the suite on Linux, in a container, as a regular user (needs Docker)
 prek install -t pre-commit -t pre-push       # git hooks: fmt + clippy on commit, tests on push
 ```
 
