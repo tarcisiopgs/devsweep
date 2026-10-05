@@ -14,13 +14,14 @@ source = "docs: https://go.dev/ref/mod#module-cache"
 id = "go-build"
 group = "Go"
 label = "Go build cache"
-paths = ["~/Library/Caches/go-build"]
+paths_macos = ["~/Library/Caches/go-build"]
+paths_linux = ["{xdg_cache}/go-build"]
 safe = true
 mode = "clear"
 command = ["go", "clean", "-cache"]
 requires_bin = "go"
 busy_when = ["go"]
-source = "docs: https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching"
+source = "docs: https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching and https://pkg.go.dev/os#UserCacheDir"
 
 [[rule]]
 id = "cargo-registry"

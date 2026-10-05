@@ -2,7 +2,8 @@
 id = "pip"
 group = "Python"
 label = "pip cache"
-paths = ["~/Library/Caches/pip"]
+paths_macos = ["~/Library/Caches/pip"]
+paths_linux = ["{xdg_cache}/pip"]
 safe = false
 mode = "clear"
 source = "docs: https://pip.pypa.io/en/stable/topics/caching/"

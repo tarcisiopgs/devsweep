@@ -65,13 +65,14 @@ source = "docs: https://bun.sh/docs/install/cache"
 id = "yarn-cache"
 group = "JavaScript"
 label = "Yarn cache"
-paths = ["~/Library/Caches/Yarn"]
+paths_macos = ["~/Library/Caches/Yarn"]
+paths_linux = ["~/.cache/yarn"]
 safe = false
 mode = "clear"
 command = ["yarn", "cache", "clean"]
 requires_bin = "yarn"
 busy_when = ["yarn"]
-source = "docs: https://classic.yarnpkg.com/en/docs/cli/cache"
+source = "docs: https://classic.yarnpkg.com/en/docs/cli/cache; Linux path observed with `yarn cache dir`"
 
 [[rule]]
 id = "prisma-engines"
@@ -86,7 +87,8 @@ source = "observed on disk"
 id = "playwright"
 group = "JavaScript"
 label = "Playwright browsers"
-paths = ["~/Library/Caches/ms-playwright"]
+paths_macos = ["~/Library/Caches/ms-playwright"]
+paths_linux = ["~/.cache/ms-playwright"]
 safe = false
 mode = "clear"
 source = "docs: https://playwright.dev/docs/browsers#managing-browser-binaries"
