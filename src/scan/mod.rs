@@ -165,9 +165,9 @@ pub fn size_later(path: PathBuf, id: ItemId, tx: Sender<ScanEvent>) {
 /// Look up an executable on `PATH`.
 pub fn which(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(bin))
-        .find(|candidate| candidate.is_file())
+    let pathext = std::env::var("PATHEXT").ok();
+    let names = Os::current().exe_names(bin, pathext.as_deref());
+    crate::platform::find_executable(std::env::split_paths(&path), &names)
 }
 
 /// Longest a scan-time tool call (docker, simctl, brew…) may take.
@@ -187,7 +187,13 @@ pub fn exec(
     let (bin, args) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("empty command"))?;
-    let mut cmd = Command::new(bin);
+    // Windows only starts a `.cmd` or `.bat` tool (npm, pnpm, yarn) when
+    // given its full name, so the command is looked up first.
+    let program = match Os::current() {
+        Os::Windows => which(bin).ok_or_else(|| anyhow::anyhow!("{bin} not found"))?,
+        Os::MacOs | Os::Linux => PathBuf::from(bin),
+    };
+    let mut cmd = Command::new(program);
     cmd.args(args)
         .stdin(if stdin.is_some() {
             Stdio::piped()

@@ -170,6 +170,26 @@ impl Os {
         }
     }
 
+    /// File names a command may have on disk. Windows finds `npm` as
+    /// `npm.cmd` and `git` as `git.exe`: one name per extension in
+    /// `PATHEXT`, unless the command already carries its own.
+    pub fn exe_names(self, bin: &str, pathext: Option<&str>) -> Vec<String> {
+        const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+        match self {
+            Os::MacOs | Os::Linux => vec![bin.to_string()],
+            Os::Windows if Path::new(bin).extension().is_some() => vec![bin.to_string()],
+            Os::Windows => {
+                let extensions = pathext.filter(|list| !list.trim().is_empty());
+                extensions
+                    .unwrap_or(DEFAULT_PATHEXT)
+                    .split(';')
+                    .filter(|ext| !ext.is_empty())
+                    .map(|ext| format!("{bin}{ext}"))
+                    .collect()
+            }
+        }
+    }
+
     /// File name of a tool an SDK ships as a script: a batch file on Windows.
     pub fn script_name(self, base: &str) -> String {
         match self {
@@ -187,6 +207,16 @@ impl Os {
             Os::Windows => &["AppData"],
         }
     }
+}
+
+/// The first file in `dirs` carrying one of `names` ([`Os::exe_names`]).
+pub fn find_executable(
+    dirs: impl IntoIterator<Item = PathBuf>,
+    names: &[String],
+) -> Option<PathBuf> {
+    dirs.into_iter()
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .find(|candidate| candidate.is_file())
 }
 
 /// A path as git prints it. On Unix a path is its bytes; elsewhere git
@@ -583,6 +613,50 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let path = path_from_git_bytes(b"src/caf\xe9.rs").unwrap();
         assert_eq!(path.as_os_str().as_bytes(), b"src/caf\xe9.rs");
+    }
+
+    #[test]
+    fn windows_tries_pathext_extensions() {
+        let names = Os::Windows.exe_names("npm", Some(".COM;.EXE;.BAT;.CMD"));
+        assert_eq!(names, ["npm.COM", "npm.EXE", "npm.BAT", "npm.CMD"]);
+        // Without PATHEXT, the system's own default list.
+        assert_eq!(Os::Windows.exe_names("npm", None), names);
+        assert_eq!(Os::Windows.exe_names("npm", Some("")), names);
+        assert_eq!(
+            Os::Windows.exe_names("git", Some(".EXE;;.CMD")),
+            ["git.EXE", "git.CMD"]
+        );
+    }
+
+    #[test]
+    fn windows_keeps_an_explicit_extension() {
+        assert_eq!(
+            Os::Windows.exe_names("avdmanager.bat", Some(".EXE")),
+            ["avdmanager.bat"]
+        );
+    }
+
+    #[test]
+    fn unix_uses_the_name_as_is() {
+        for os in [Os::MacOs, Os::Linux] {
+            assert_eq!(os.exe_names("npm", Some(".EXE;.CMD")), ["npm"]);
+        }
+    }
+
+    #[test]
+    fn executable_is_found_by_any_of_its_names() {
+        let d = tempfile::tempdir().unwrap();
+        let (empty, bin) = (d.path().join("empty"), d.path().join("bin"));
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(bin.join("npm.EXE")).unwrap();
+        std::fs::write(bin.join("npm.CMD"), "").unwrap();
+        let names = Os::Windows.exe_names("npm", Some(".EXE;.CMD"));
+        // A folder with the right name is not an executable.
+        assert_eq!(
+            find_executable([empty.clone(), bin.clone()], &names),
+            Some(bin.join("npm.CMD"))
+        );
+        assert_eq!(find_executable([empty], &names), None);
     }
 
     #[test]
