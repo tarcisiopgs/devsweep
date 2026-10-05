@@ -109,7 +109,11 @@ jobs:
             "win32:x64:x86_64-pc-windows-msvc"; do
             IFS=: read -r OS ARCH TARGET <<< "$entry"
             PKG="pkg-$OS-$ARCH"
+            NAME="devsweep-$OS-$ARCH"
             if [ "$OS" = win32 ]; then
+              # npm refuses the unscoped names (its spam detection rejects
+              # `devsweep-win32-*`), so the Windows packages are scoped.
+              NAME="@tarcisiopgs/$NAME"
               BIN=devsweep.exe
               unzip -q "dl/devsweep-$TARGET.zip" -d dl
             else
@@ -119,7 +123,7 @@ jobs:
             mkdir -p "$PKG/bin"
             cp "dl/devsweep-$TARGET/$BIN" "$PKG/bin/$BIN"
             chmod +x "$PKG/bin/$BIN"
-            OS="$OS" ARCH="$ARCH" VERSION="$VERSION" envsubst < npm/platform/package.json.tmpl > "$PKG/package.json"
+            NAME="$NAME" OS="$OS" ARCH="$ARCH" VERSION="$VERSION" envsubst < npm/platform/package.json.tmpl > "$PKG/package.json"
             cp LICENSE "$PKG/"
             (cd "$PKG" && publish)
           done
@@ -142,6 +146,6 @@ jobs:
             "optionalDependencies.devsweep-darwin-x64=$VERSION" \
             "optionalDependencies.devsweep-linux-arm64=$VERSION" \
             "optionalDependencies.devsweep-linux-x64=$VERSION" \
-            "optionalDependencies.devsweep-win32-arm64=$VERSION" \
-            "optionalDependencies.devsweep-win32-x64=$VERSION"
+            "optionalDependencies.@tarcisiopgs/devsweep-win32-arm64=$VERSION" \
+            "optionalDependencies.@tarcisiopgs/devsweep-win32-x64=$VERSION"
           publish

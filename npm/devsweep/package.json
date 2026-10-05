@@ -22,7 +22,7 @@
     "devsweep-darwin-x64": "0.0.0",
     "devsweep-linux-arm64": "0.0.0",
     "devsweep-linux-x64": "0.0.0",
-    "devsweep-win32-arm64": "0.0.0",
-    "devsweep-win32-x64": "0.0.0"
+    "@tarcisiopgs/devsweep-win32-arm64": "0.0.0",
+    "@tarcisiopgs/devsweep-win32-x64": "0.0.0"
   }
 }

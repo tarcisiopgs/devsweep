@@ -111,8 +111,8 @@ Rules live in `catalog/*.toml`, one file per ecosystem. The schema and the meani
 `.github/workflows/release.yml` runs on `release: published`:
 - it checks that the tag matches `Cargo.toml`;
 - it builds `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl`, `aarch64-pc-windows-msvc` and `x86_64-pc-windows-msvc` and attaches the archives to the release (`.tar.xz`, and `.zip` for Windows);
-- it publishes `@tarcisiopgs/devsweep` and the platform packages `devsweep-darwin-arm64`, `devsweep-darwin-x64`, `devsweep-linux-arm64`, `devsweep-linux-x64`, `devsweep-win32-arm64` and `devsweep-win32-x64` to npm through trusted publishing (OIDC).
+- it publishes `@tarcisiopgs/devsweep` and the platform packages `devsweep-darwin-arm64`, `devsweep-darwin-x64`, `devsweep-linux-arm64`, `devsweep-linux-x64`, `@tarcisiopgs/devsweep-win32-arm64` and `@tarcisiopgs/devsweep-win32-x64` to npm through trusted publishing (OIDC).
 
-Each platform package needs its own trusted publisher on npmjs.com (repository `tarcisiopgs/devsweep`, workflow `release.yml`), configured once after the package exists.
+Each platform package needs its own trusted publisher on npmjs.com (repository `tarcisiopgs/devsweep`, workflow `release.yml`), configured once after the package exists. A new package name is therefore published once by hand (a `0.0.0` placeholder) before the first release that ships it; `npm trust github <package> --repo tarcisiopgs/devsweep --file release.yml` then configures the publisher. The Windows packages are scoped because npm's spam detection rejects the unscoped `devsweep-win32-*` names.
 
 No npm token exists. npm trusts the workflow by its file name, so do not rename `release.yml`.
