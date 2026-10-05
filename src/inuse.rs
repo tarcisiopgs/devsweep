@@ -547,6 +547,8 @@ mod tests {
         assert!(own.is_none_or(|l| !l.contains(&format!("PID {}", std::process::id()))));
     }
 
+    // The chain behind the macOS snapshot is read with `ps`.
+    #[cfg(unix)]
     #[test]
     fn own_ancestors_include_parent() {
         let pids = own_process_chain();

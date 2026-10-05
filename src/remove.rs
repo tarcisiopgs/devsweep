@@ -385,7 +385,7 @@ mod tests {
 
     fn home() -> (tempfile::TempDir, PathBuf) {
         let d = tempfile::tempdir().unwrap();
-        let p = fs::canonicalize(d.path()).unwrap();
+        let p = crate::platform::canonical(d.path()).unwrap();
         (d, p)
     }
 
@@ -1088,6 +1088,8 @@ mod tests {
         );
     }
 
+    // `touch` is not a Windows tool.
+    #[cfg(unix)]
     #[test]
     fn command_args_are_not_shell_joined() {
         let (_d, h) = home();

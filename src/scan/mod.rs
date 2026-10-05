@@ -425,6 +425,8 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
+    // `pwd` in `/` is a Unix answer.
+    #[cfg(unix)]
     #[test]
     fn run_timeout_returns_stdout() {
         let out = run_timeout(

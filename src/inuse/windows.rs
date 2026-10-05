@@ -83,7 +83,11 @@ mod tests {
         let lock = inuse.lock_for(&dir);
         child.kill().unwrap();
         child.wait().unwrap();
-        assert_eq!(lock, Some(format!("ping · PID {}", child.id())));
+        // Windows reports the name as the file is spelled: `PING.EXE`.
+        assert_eq!(
+            lock.map(|l| l.to_lowercase()),
+            Some(format!("ping · pid {}", child.id()))
+        );
         assert_eq!(inuse.lock_for(&dir.join("not-here")), None);
     }
 

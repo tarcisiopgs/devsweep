@@ -432,6 +432,9 @@ mod tests {
         assert!(dirs.contains(&home.to_path_buf()));
     }
 
+    // Linux and macOS rules over their own absolute paths, which are not
+    // absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn extra_root_above_home_is_dropped() {
         let home = Path::new("/home/u");
@@ -461,6 +464,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn macos_extra_root_is_the_darwin_cache_dir() {
         let home = Path::new("/Users/u");

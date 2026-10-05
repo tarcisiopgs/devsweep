@@ -562,7 +562,9 @@ mod tests {
         fs::write(d.path().join("a/package.json"), "{}").unwrap();
         mk(d.path(), "a/ios/Pods");
         let ev = scan_with(d.path(), InUse::default());
-        assert_eq!(items(&ev)[0].label, "a · ios/Pods");
+        // The label spells the path the way the system does.
+        let pods = Path::new("ios").join("Pods");
+        assert_eq!(items(&ev)[0].label, format!("a · {}", pods.display()));
     }
 
     #[test]
@@ -643,12 +645,13 @@ mod tests {
         let mut found = items(&ev);
         found.sort_by_key(|i| i.label.clone());
         let labels: Vec<&str> = found.iter().map(|i| i.label.as_str()).collect();
+        let apk = Path::new("out-dir").join("app-release.APK");
         assert_eq!(
             labels,
             [
-                "app · app.aab",
-                "app · build-1.ipa",
-                "app · out-dir/app-release.APK"
+                "app · app.aab".to_string(),
+                "app · build-1.ipa".to_string(),
+                format!("app · {}", apk.display()),
             ]
         );
         let ipa = found[1];

@@ -59,6 +59,8 @@ impl Android {
 
         for (name, dir) in avds {
             if let Some(sysdir) = read_ini(&dir.join("config.ini"), "image.sysdir.1") {
+                // Windows writes this path with backslashes.
+                let sysdir = sysdir.replace('\\', "/");
                 referenced.insert(sysdir.trim_end_matches('/').to_string());
             }
             // The emulator names its AVD with `-avd NAME` or `@NAME`, on
@@ -204,7 +206,12 @@ fn system_images(sdk: &Path) -> Vec<String> {
         for tag in read_dirs(&api) {
             for abi in read_dirs(&tag) {
                 if let Ok(rel) = abi.strip_prefix(sdk) {
-                    out.push(rel.display().to_string());
+                    // Always with `/`, the way an AVD names its image.
+                    let parts: Vec<_> = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy())
+                        .collect();
+                    out.push(parts.join("/"));
                 }
             }
         }
@@ -283,7 +290,8 @@ mod tests {
     }
 
     fn scan_in(android: &Android, inuse: InUse) -> Vec<Item> {
-        let ctx = ScanCtx::new("/tmp".into(), "/tmp".into(), inuse);
+        // As on macOS: `avdmanager` has no extension there.
+        let ctx = ScanCtx::new("/tmp".into(), "/tmp".into(), inuse).with_os(Os::MacOs);
         let (tx, rx) = crossbeam_channel::unbounded();
         android.scan(&ctx, &tx).unwrap();
         drop(tx);
@@ -438,6 +446,50 @@ mod tests {
         let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
         assert!(avd.lock.is_some());
         assert!(!avd.selectable());
+    }
+
+    /// On Windows the AVD names its system image with backslashes. An image
+    /// in use must not show up as an orphan because of how its path is spelled.
+    #[test]
+    fn windows_style_sysdir_marks_the_image_as_referenced() {
+        let d = tempfile::tempdir().unwrap();
+        let (sdk, avd_home) = (d.path().join("sdk"), d.path().join("avd"));
+        make_avd(
+            &avd_home,
+            "Pixel_8_API_34",
+            "system-images\\android-34\\google_apis\\arm64-v8a\\",
+        );
+        make_image(&sdk, "system-images/android-34/google_apis/arm64-v8a");
+        let a = Android {
+            sdk: Some(sdk),
+            avd_home,
+        };
+        let labels: Vec<String> = scan(&a, "").into_iter().map(|i| i.label).collect();
+        assert_eq!(labels, ["Pixel_8_API_34"]);
+    }
+
+    /// The SDK ships `avdmanager` as a batch file on Windows.
+    #[test]
+    fn avd_removal_uses_the_batch_file_on_windows() {
+        let (d, a) = setup();
+        let bin = d.path().join("sdk/cmdline-tools/latest/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("avdmanager.bat"), "").unwrap();
+        let ctx = ScanCtx::new("/tmp".into(), "/tmp".into(), InUse::default()).with_os(Os::Windows);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        a.scan(&ctx, &tx).unwrap();
+        drop(tx);
+        let avd = rx
+            .iter()
+            .find_map(|e| match e {
+                ScanEvent::Found(i) if i.label == "Pixel_8_API_34" => Some(i),
+                _ => None,
+            })
+            .unwrap();
+        let Removal::Command { argv, .. } = &avd.removal else {
+            panic!("{:?}", avd.removal);
+        };
+        assert!(argv[0].ends_with("avdmanager.bat"), "{}", argv[0]);
     }
 
     #[test]

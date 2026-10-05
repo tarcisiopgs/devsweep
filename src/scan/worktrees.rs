@@ -326,7 +326,7 @@ impl Scanner for Worktrees {
                 if entry.prunable || !entry.path.exists() {
                     continue;
                 }
-                let wt = std::fs::canonicalize(&entry.path).unwrap_or(entry.path);
+                let wt = crate::platform::canonical(&entry.path).unwrap_or(entry.path);
                 if !lock(&ctx.seen_worktrees).insert(wt.clone()) {
                     continue;
                 }
@@ -411,7 +411,7 @@ impl Scanner for AgentWorktrees {
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
         ctx.wait_worktrees_done();
         for root in self.roots.iter().filter(|r| r.is_dir()) {
-            let root = std::fs::canonicalize(root).unwrap_or(root.clone());
+            let root = crate::platform::canonical(root).unwrap_or(root.clone());
             for wt in find_worktree_dirs(&root, 3) {
                 if lock(&ctx.seen_worktrees).contains(&wt) {
                     continue;
@@ -538,7 +538,7 @@ fn storage_present(ctx: &ScanCtx, gitdir: &Path) -> bool {
     {
         return false;
     }
-    let Ok(real) = std::fs::canonicalize(existing) else {
+    let Ok(real) = crate::platform::canonical(existing) else {
         return false;
     };
     let holds_something =
@@ -675,7 +675,7 @@ mod tests {
     fn home_folders_skipped_follow_the_platform() {
         use crate::platform::Os;
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         for folder in ["Library", ".cache"] {
             let r = home.join(folder).join("r");
             repo(&r);
@@ -698,7 +698,7 @@ mod tests {
     /// A repo under `target/r` with one worktree at `target/wt`.
     fn setup(branch_merged: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let d = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(d.path()).unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
         let r = root.join("r");
         repo(&r);
         git(&r, &["checkout", "-q", "-b", "feat"]);
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn detached_head_contained_in_main_is_merged() {
         let d = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(d.path()).unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
         let r = root.join("r");
         repo(&r);
         git(
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn agent_worktree_of_bare_repo_is_not_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let r = home.join("r");
         repo(&r);
         let bare = home.join("bare.git");
@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn agent_worktree_with_failing_git_is_locked_unknown() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let r = home.join("r");
         repo(&r);
         let root = home.join(".codex/worktrees");
@@ -984,10 +984,12 @@ mod tests {
     /// An unmounted disk leaves the `gitdir:` target missing without the
     /// repository being gone: the worktree must never become a folder to
     /// delete.
+    // `/mnt/…` is only an absolute path on Unix.
+    #[cfg(unix)]
     #[test]
     fn worktree_of_a_repo_on_an_unmounted_linux_disk_is_unknown_not_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let agent_root = home.join(".codex/worktrees");
         let wt = agent_root.join("w1");
         fs::create_dir_all(&wt).unwrap();
@@ -1038,7 +1040,7 @@ mod tests {
     #[test]
     fn worktree_of_a_repo_under_an_empty_mount_point_is_unknown_not_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let mount_point = home.join("data");
         fs::create_dir_all(&mount_point).unwrap();
         let agent_root = home.join(".codex/worktrees");
@@ -1052,7 +1054,7 @@ mod tests {
     #[test]
     fn relative_gitdir_into_an_empty_mount_point_is_unknown_not_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         fs::create_dir_all(home.join("data")).unwrap();
         let agent_root = home.join(".codex/worktrees");
         orphan(&agent_root, "../../../data/r/.git/worktrees/w1");
@@ -1061,10 +1063,13 @@ mod tests {
 
     /// A `gitdir:` that walks back up after a missing folder cannot be
     /// followed, so nothing is known about where it ends.
+    // Windows resolves `..` in the text of a path, so there the same
+    // `gitdir:` simply names a folder that is missing.
+    #[cfg(unix)]
     #[test]
     fn gitdir_with_dots_after_a_missing_folder_is_unknown_not_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         fs::write(home.join("file"), "x").unwrap();
         let agent_root = home.join(".codex/worktrees");
         let gitdir = home.join("missing/../data/r/.git/worktrees/w1");
@@ -1078,7 +1083,7 @@ mod tests {
     #[test]
     fn gitdir_through_a_dangling_symlink_is_unknown_not_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         fs::write(home.join("file"), "x").unwrap();
         std::os::unix::fs::symlink(home.join("unplugged"), home.join("code")).unwrap();
         let agent_root = home.join(".codex/worktrees");
@@ -1092,7 +1097,7 @@ mod tests {
     #[test]
     fn worktree_of_a_repo_deleted_from_a_folder_in_use_is_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         fs::create_dir_all(home.join("code/other-project")).unwrap();
         let agent_root = home.join(".codex/worktrees");
         let gitdir = home.join("code/r/.git/worktrees/w1");
@@ -1105,7 +1110,7 @@ mod tests {
     #[test]
     fn worktree_with_missing_main_repo_is_broken() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let r = home.join("r");
         repo(&r);
         let agent_root = home.join(".codex/worktrees");
@@ -1138,7 +1143,7 @@ mod tests {
         // Scanning $HOME finds the main repo, whose worktrees live in an
         // agent root: they belong to Agent worktrees, not This folder.
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let r = home.join("r");
         repo(&r);
         let orca = home.join("orca/workspaces/site");
@@ -1180,7 +1185,7 @@ mod tests {
         // A main repo in a folder we cannot read (privacy prompt, unmounted
         // volume) must never turn its worktree into a deletable folder.
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let private = home.join("private");
         let r = private.join("r");
         repo(&r);
@@ -1218,7 +1223,7 @@ mod tests {
     #[test]
     fn agent_roots_find_nested_worktrees_and_skip_seen() {
         let d = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(d.path()).unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
         let r = home.join("r");
         repo(&r);
         let orca = home.join("orca/workspaces");
@@ -1317,7 +1322,7 @@ mod tests {
     #[test]
     fn detached_worktree_leaves_no_branch_behind() {
         let d = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(d.path()).unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
         let r = root.join("r");
         repo(&r);
         let wt = root.join("wt");
@@ -1339,7 +1344,7 @@ mod tests {
     fn the_default_branch_is_never_a_leftover() {
         // A bare repository keeps `main` in a worktree like any other branch.
         let d = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(d.path()).unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
         let r = root.join("r");
         repo(&r);
         let bare = root.join("bare.git");
