@@ -89,7 +89,8 @@ pub const RECYCLE_BIN_QUERY: [&str; 5] = [
     "-NoProfile",
     "-NonInteractive",
     "-Command",
-    "$items = @((New-Object -ComObject Shell.Application).Namespace(10).Items()); \
+    "$ErrorActionPreference = 'Stop'; \
+     $items = @((New-Object -ComObject Shell.Application).Namespace(10).Items()); \
      $size = ($items | ForEach-Object { $_.ExtendedProperty('System.Size') } | Measure-Object -Sum).Sum; \
      if ($null -eq $size) { $size = 0 }; \
      '{\"count\":' + $items.Count + ',\"size\":' + [long]$size + '}'",
@@ -99,7 +100,8 @@ pub const RECYCLE_BIN_QUERY: [&str; 5] = [
 /// item Windows refused to delete must not be reported as freed.
 fn recycle_bin_removal() -> Removal {
     let script = format!(
-        "Clear-RecycleBin -Force -ErrorAction SilentlyContinue; \
+        "$ErrorActionPreference = 'Stop'; \
+         Clear-RecycleBin -Force -ErrorAction SilentlyContinue; \
          if ({RECYCLE_BIN_COUNT}.Count -gt 0) {{ exit 1 }}"
     );
     Removal::Command {
@@ -556,11 +558,20 @@ mod tests {
             argv[..4],
             ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
         );
-        assert!(
-            argv[4].starts_with("Clear-RecycleBin -Force"),
-            "{}",
-            argv[4]
-        );
+        assert!(argv[4].contains("Clear-RecycleBin -Force"), "{}", argv[4]);
+    }
+
+    /// Without this, PowerShell carries on after a failed statement: a
+    /// shell object that could not be created would count as zero items.
+    #[test]
+    fn recycle_bin_scripts_stop_on_the_first_error() {
+        let stop = "$ErrorActionPreference = 'Stop'; ";
+        assert!(RECYCLE_BIN_QUERY[4].starts_with(stop));
+        let Removal::Command { argv, .. } = recycle_bin_removal() else {
+            panic!("not a command");
+        };
+        assert!(argv[4].starts_with(stop), "{}", argv[4]);
+        assert!(argv[4].contains("Clear-RecycleBin -Force"), "{}", argv[4]);
     }
 
     #[test]

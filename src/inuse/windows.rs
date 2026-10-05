@@ -3,15 +3,12 @@
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-use super::{InUse, Proc};
+use super::{InUse, Seen, ancestors};
 
-/// Longest chain of ancestors followed before giving up.
-const MAX_ANCESTORS: usize = 32;
-
-/// Snapshot of every process that shows its working directory, except
-/// devsweep and its ancestors. Processes of other users, and protected
-/// ones, do not show theirs and are skipped. Seeing nobody else's fails
-/// closed: devsweep can always read its own.
+/// Snapshot of every process except devsweep and its ancestors. A process
+/// started elevated, or by another user, shows its name but not its working
+/// directory: it still counts by name and locks no path. Seeing nobody's
+/// working directory fails closed: devsweep can always read its own.
 pub fn collect() -> InUse {
     let mut system = System::new();
     system.refresh_processes_specifics(
@@ -21,74 +18,88 @@ pub fn collect() -> InUse {
             .with_cwd(UpdateKind::Always)
             .with_cmd(UpdateKind::Always),
     );
-    let own = own_chain(&system);
-    let procs: Vec<Proc> = system
+    let own = ancestors(std::process::id(), &|pid| {
+        let process = system.process(Pid::from_u32(pid))?;
+        Some((process.parent().map(Pid::as_u32), process.start_time()))
+    });
+    let seen = system
         .processes()
         .iter()
-        .filter(|(pid, _)| !own.contains(pid))
-        .filter_map(|(pid, process)| {
-            let cwd = process.cwd()?.to_path_buf();
-            let argv: Vec<String> = process
+        .filter(|(pid, _)| !own.contains(&pid.as_u32()))
+        .map(|(pid, process)| Seen {
+            pid: pid.as_u32(),
+            name: process.name().to_string_lossy().into_owned(),
+            cwd: process.cwd().map(|cwd| cwd.to_path_buf()),
+            argv: process
                 .cmd()
                 .iter()
                 .map(|arg| arg.to_string_lossy().into_owned())
-                .collect();
-            Some(Proc {
-                pid: pid.as_u32(),
-                name: process.name().to_string_lossy().into_owned(),
-                cwd,
-                args: argv.join(" "),
-                argv,
-            })
+                .collect(),
         })
         .collect();
-    if procs.is_empty() {
-        return InUse::failed("no other process shows its working directory");
-    }
-    InUse::from_procs(procs)
-}
-
-/// This process and its ancestors (npx, node, the shell…).
-fn own_chain(system: &System) -> Vec<Pid> {
-    let mut chain = vec![Pid::from_u32(std::process::id())];
-    while let Some(&pid) = chain.last() {
-        match system.process(pid).and_then(|process| process.parent()) {
-            Some(parent) if !chain.contains(&parent) && chain.len() < MAX_ANCESTORS => {
-                chain.push(parent)
-            }
-            _ => break,
-        }
-    }
-    chain
+    InUse::from_seen(seen)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::platform::Os;
-    use std::process::{Command, Stdio};
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+
+    /// A process that stays in `dir` for a while.
+    fn working_in(dir: &Path) -> Child {
+        Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .current_dir(dir)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn stop(mut child: Child) {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
 
     /// A real process working in a folder is found there.
     #[test]
     fn own_cwd_is_seen() {
         let d = tempfile::tempdir().unwrap();
         let dir = dunce::canonicalize(d.path()).unwrap();
-        let mut child = Command::new("ping")
-            .args(["-n", "30", "127.0.0.1"])
-            .current_dir(&dir)
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
+        let child = working_in(&dir);
+        let pid = child.id();
         let inuse = collect().for_os(Os::Windows);
         let lock = inuse.lock_for(&dir);
-        child.kill().unwrap();
-        child.wait().unwrap();
+        stop(child);
         // Windows reports the name as the file is spelled: `PING.EXE`.
         assert_eq!(
             lock.map(|l| l.to_lowercase()),
-            Some(format!("ping · pid {}", child.id()))
+            Some(format!("ping · pid {pid}"))
         );
         assert_eq!(inuse.lock_for(&dir.join("not-here")), None);
+    }
+
+    /// A process reports its working directory the way it was given: through
+    /// a junction, or with a short `RUNNER~1` name. Items are found by their
+    /// resolved path, and the process must still lock them.
+    #[test]
+    fn a_process_that_entered_through_a_junction_locks_the_real_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let base = dunce::canonicalize(d.path()).unwrap();
+        let (real, junction) = (base.join("real"), base.join("link"));
+        std::fs::create_dir_all(&real).unwrap();
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&real)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        let child = working_in(&junction);
+        let lock = collect().for_os(Os::Windows).lock_for(&real);
+        stop(child);
+        assert!(lock.is_some());
     }
 
     #[test]

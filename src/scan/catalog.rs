@@ -353,6 +353,14 @@ mod tests {
         }
     }
 
+    /// Android Studio runs as `studio64.exe` on Windows.
+    #[test]
+    fn android_studio_is_busy_under_its_windows_name() {
+        let busy = by_id("android-sdk-cache").busy_when;
+        assert!(busy.iter().any(|n| n == "studio"));
+        assert!(busy.iter().any(|n| n == "studio64"));
+    }
+
     #[test]
     fn rule_ids_are_unique() {
         let rules = load_catalog().unwrap();

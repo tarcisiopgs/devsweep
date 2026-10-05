@@ -198,13 +198,14 @@ impl Os {
         }
     }
 
-    /// Folders directly inside the home folder that the repository walk
-    /// does not enter.
+    /// Folders directly inside the home folder that hold tools and their
+    /// data, not projects: neither the repository walk nor the artifact walk
+    /// enters them.
     pub fn skip_at_home(self) -> &'static [&'static str] {
         match self {
             Os::MacOs => &["Library", ".Trash"],
             Os::Linux => &[".cache"],
-            Os::Windows => &["AppData"],
+            Os::Windows => &["AppData", "scoop"],
         }
     }
 }
@@ -667,6 +668,6 @@ mod tests {
     fn home_folders_skipped_by_the_walk() {
         assert_eq!(Os::MacOs.skip_at_home(), ["Library", ".Trash"]);
         assert_eq!(Os::Linux.skip_at_home(), [".cache"]);
-        assert_eq!(Os::Windows.skip_at_home(), ["AppData"]);
+        assert_eq!(Os::Windows.skip_at_home(), ["AppData", "scoop"]);
     }
 }

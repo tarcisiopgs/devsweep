@@ -189,9 +189,11 @@ fn is_pruned(path: &Path, ctx: &ScanCtx) -> bool {
     if name == ".git" {
         return true;
     }
-    // Right under the home folder, `Library` and dot-folders hold tools
-    // (global npm, editor extensions, caches), not projects.
-    path.parent() == Some(ctx.home.as_path()) && (name == "Library" || name.starts_with('.'))
+    // Right under the home folder, dot-folders and the folders where this
+    // system installs tools (`Library`, `AppData`) hold programs (global
+    // npm, editors, version managers) and caches, not projects.
+    path.parent() == Some(ctx.home.as_path())
+        && (name.starts_with('.') || ctx.os.skip_at_home().contains(&name))
 }
 
 fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
@@ -414,7 +416,11 @@ mod tests {
     }
 
     fn scan_with(root: &Path, inuse: InUse) -> Vec<ScanEvent> {
-        let ctx = ScanCtx::new(root.to_path_buf(), root.to_path_buf(), inuse);
+        scan_on(crate::platform::Os::MacOs, root, inuse)
+    }
+
+    fn scan_on(os: crate::platform::Os, root: &Path, inuse: InUse) -> Vec<ScanEvent> {
+        let ctx = ScanCtx::new(root.to_path_buf(), root.to_path_buf(), inuse).with_os(os);
         let (tx, rx) = crossbeam_channel::unbounded();
         Artifacts.scan(&ctx, &tx).unwrap();
         drop(tx);
@@ -589,6 +595,45 @@ mod tests {
         assert_eq!(
             it.removal,
             Removal::RemoveDir(d.path().join("a/node_modules"))
+        );
+    }
+
+    /// Under the home folder, the folders where each system installs tools
+    /// hold their own `node_modules`: global npm packages, editors, version
+    /// managers. Those are programs, never project artifacts.
+    #[test]
+    fn tool_folders_under_home_are_not_projects_on_any_system() {
+        use crate::platform::Os;
+        let d = tempfile::tempdir().unwrap();
+        mk(d.path(), "AppData/Roaming/npm/node_modules");
+        mk(
+            d.path(),
+            "AppData/Local/Programs/editor/resources/app/node_modules",
+        );
+        mk(d.path(), "scoop/apps/nodejs/current/node_modules");
+        mk(d.path(), "Library/x/node_modules");
+        mk(d.path(), ".nvm/versions/node/lib/node_modules");
+        mk(d.path(), "code/z/node_modules");
+        let found = |os| -> Vec<PathBuf> {
+            let mut paths: Vec<PathBuf> = items(&scan_on(os, d.path(), InUse::default()))
+                .iter()
+                .filter_map(|i| i.path.clone())
+                .collect();
+            paths.sort();
+            paths
+        };
+        let project = d.path().join("code/z/node_modules");
+        assert_eq!(
+            found(Os::Windows),
+            [d.path().join("Library/x/node_modules"), project.clone()]
+        );
+        assert!(found(Os::MacOs).contains(&project));
+        assert!(!found(Os::MacOs).contains(&d.path().join("Library/x/node_modules")));
+        assert!(found(Os::Linux).contains(&project));
+        assert!(
+            !found(Os::Linux)
+                .iter()
+                .any(|p| p.starts_with(d.path().join(".nvm")))
         );
     }
 
