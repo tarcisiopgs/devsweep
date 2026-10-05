@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::fsutil::days_since;
 use crate::model::{Item, Removal, SourceId, Status};
-use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, run, size_later};
-
-type Runner<'a> = &'a dyn Fn(&[&str]) -> anyhow::Result<String>;
+use crate::platform::Os;
+use crate::scan::{ScanCtx, ScanEvent, Scanner, Sender, size_later};
 
 pub struct Android {
     pub sdk: Option<PathBuf>,
@@ -34,28 +33,26 @@ pub fn avd_home_from(env: &dyn Fn(&str) -> Option<std::ffi::OsString>, home: &Pa
 impl Android {
     /// Locate the SDK (`$ANDROID_HOME`, `$ANDROID_SDK_ROOT`, the Android
     /// Studio default) and the AVD home (`$ANDROID_AVD_HOME`, `~/.android/avd`).
-    pub fn detect(home: &Path) -> Android {
+    pub fn detect(home: &Path, os: Os) -> Android {
+        let env = &crate::platform::process_env;
         let sdk = ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
             .iter()
-            .filter_map(std::env::var_os)
+            .filter_map(|key| env(key))
             .map(PathBuf::from)
-            .chain(std::iter::once(home.join("Library/Android/sdk")))
+            .chain(os.android_sdk_default(home, env))
             .find(|p| p.is_dir());
-        let avd_home = avd_home_from(&|k| std::env::var_os(k), home);
+        let avd_home = avd_home_from(env, home);
         Android { sdk, avd_home }
     }
 
-    pub fn scan_with(
-        &self,
-        ctx: &ScanCtx,
-        tx: &Sender<ScanEvent>,
-        runner: Runner,
-    ) -> anyhow::Result<()> {
-        let emulators = runner(&["pgrep", "-fl", "qemu-system"]).unwrap_or_default();
+    fn scan_avds(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
         let avdmanager = self
             .sdk
             .as_ref()
-            .map(|sdk| sdk.join("cmdline-tools/latest/bin/avdmanager"))
+            .map(|sdk| {
+                sdk.join("cmdline-tools/latest/bin")
+                    .join(ctx.os.script_name("avdmanager"))
+            })
             .filter(|p| p.is_file());
         let mut referenced = HashSet::new();
         let avds = self.avds();
@@ -64,14 +61,18 @@ impl Android {
             if let Some(sysdir) = read_ini(&dir.join("config.ini"), "image.sysdir.1") {
                 referenced.insert(sysdir.trim_end_matches('/').to_string());
             }
-            let running = emulators
-                .lines()
-                .any(|l| l.contains(&format!("-avd {name}")) || l.contains(&format!("@{name}")));
+            // The emulator names its AVD with `-avd NAME` or `@NAME`, on
+            // every system. A snapshot that failed says so instead.
+            let named = vec![format!("-avd {name}"), format!("@{name}")];
             let age = std::fs::metadata(&dir)
                 .and_then(|m| m.modified())
                 .ok()
                 .map(days_since);
-            let mut lock = running.then(|| "emulator running".to_string());
+            let mut lock = ctx.inuse.failure().or_else(|| {
+                ctx.inuse
+                    .args_containing(&named)
+                    .map(|_| "emulator running".to_string())
+            });
             let removal = match &avdmanager {
                 Some(bin) => Removal::Command {
                     argv: vec![
@@ -107,8 +108,7 @@ impl Android {
                 removal,
                 age_days: age,
                 recheck: crate::model::Recheck {
-                    // The emulator names its AVD with `-avd NAME` or `@NAME`.
-                    args: vec![format!("-avd {name}"), format!("@{name}")],
+                    args: named,
                     ..Default::default()
                 },
             };
@@ -235,7 +235,7 @@ impl Scanner for Android {
     }
 
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
-        self.scan_with(ctx, tx, &|argv| run(argv))
+        self.scan_avds(ctx, tx)
     }
 }
 
@@ -268,13 +268,24 @@ mod tests {
         fs::write(sdk.join(rel).join("system.img"), vec![0u8; 4096]).unwrap();
     }
 
-    fn scan(android: &Android, pgrep: &str) -> Vec<Item> {
-        let ctx = ScanCtx::new("/tmp".into(), "/tmp".into(), InUse::default());
+    /// A process snapshot holding the given `ps` lines (`PID command line`).
+    fn processes(ps: &str) -> InUse {
+        let args = InUse::parse_ps(ps);
+        let lsof: String = args
+            .keys()
+            .map(|pid| format!("p{pid}\ncqemu-system-aarch64\nn/\n"))
+            .collect();
+        InUse::parse(&lsof).with_args(&args)
+    }
+
+    fn scan(android: &Android, ps: &str) -> Vec<Item> {
+        scan_in(android, processes(ps))
+    }
+
+    fn scan_in(android: &Android, inuse: InUse) -> Vec<Item> {
+        let ctx = ScanCtx::new("/tmp".into(), "/tmp".into(), inuse);
         let (tx, rx) = crossbeam_channel::unbounded();
-        let pgrep = pgrep.to_string();
-        android
-            .scan_with(&ctx, &tx, &move |_| Ok(pgrep.clone()))
-            .unwrap();
+        android.scan(&ctx, &tx).unwrap();
         drop(tx);
         rx.iter()
             .filter_map(|e| {
@@ -325,6 +336,40 @@ mod tests {
         );
         let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
         assert_eq!(avd.lock.as_deref(), Some("emulator running"));
+    }
+
+    /// The emulator binary differs per system; what names the AVD does not.
+    #[test]
+    fn running_emulator_locks_avd_on_any_platform() {
+        let (_d, a) = setup();
+        for ps in [
+            "812 /home/u/Android/Sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64 -avd Pixel_8_API_34\n",
+            "812 C:\\Users\\u\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe @Pixel_8_API_34\n",
+        ] {
+            let items = scan(&a, ps);
+            let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
+            assert_eq!(avd.lock.as_deref(), Some("emulator running"), "{ps}");
+        }
+    }
+
+    #[test]
+    fn another_avd_running_does_not_lock_this_one() {
+        let (_d, a) = setup();
+        let items = scan(&a, "812 /sdk/emulator/qemu-system-aarch64 -avd Pixel_9\n");
+        let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
+        assert!(avd.lock.is_none());
+    }
+
+    /// Without a process snapshot nobody knows whether the emulator runs.
+    #[test]
+    fn failed_process_snapshot_locks_every_avd() {
+        let (_d, a) = setup();
+        let items = scan_in(&a, InUse::failed("lsof missing"));
+        let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
+        assert_eq!(
+            avd.lock.as_deref(),
+            Some("process check failed: lsof missing")
+        );
     }
 
     #[test]

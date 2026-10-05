@@ -162,7 +162,7 @@ impl InUse {
         parsed.excluding(&own_process_chain())
     }
 
-    fn failure(&self) -> Option<String> {
+    pub(crate) fn failure(&self) -> Option<String> {
         self.failed
             .as_ref()
             .map(|reason| format!("process check failed: {reason}"))

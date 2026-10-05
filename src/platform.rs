@@ -159,6 +159,25 @@ impl Os {
         }
     }
 
+    /// Where Android Studio installs the SDK when no variable says otherwise.
+    pub fn android_sdk_default(self, home: &Path, env: Env) -> Option<PathBuf> {
+        match self {
+            Os::MacOs => Some(home.join("Library/Android/sdk")),
+            Os::Linux => Some(home.join("Android/Sdk")),
+            Os::Windows => env("LOCALAPPDATA")
+                .filter(|v| !v.is_empty())
+                .map(|local| PathBuf::from(local).join("Android/Sdk")),
+        }
+    }
+
+    /// File name of a tool an SDK ships as a script: a batch file on Windows.
+    pub fn script_name(self, base: &str) -> String {
+        match self {
+            Os::Windows => format!("{base}.bat"),
+            Os::MacOs | Os::Linux => base.to_string(),
+        }
+    }
+
     /// Folders directly inside the home folder that the repository walk
     /// does not enter.
     pub fn skip_at_home(self) -> &'static [&'static str] {
@@ -486,6 +505,36 @@ mod tests {
             parse_mount_points(table),
             mounts(&["/sys", "/", "/media/u/My Disk"])
         );
+    }
+
+    #[test]
+    fn android_sdk_default_follows_the_platform() {
+        let none = env_of(&[]);
+        assert_eq!(
+            Os::MacOs.android_sdk_default(Path::new("/Users/u"), &none),
+            Some(PathBuf::from("/Users/u/Library/Android/sdk"))
+        );
+        assert_eq!(
+            Os::Linux.android_sdk_default(Path::new("/home/u"), &none),
+            Some(PathBuf::from("/home/u/Android/Sdk"))
+        );
+        // Windows keeps it under the local app data folder, wherever that is.
+        assert_eq!(
+            Os::Windows.android_sdk_default(Path::new("/u"), &none),
+            None
+        );
+        let env = env_of(&[("LOCALAPPDATA", "/u/AppData/Local")]);
+        assert_eq!(
+            Os::Windows.android_sdk_default(Path::new("/u"), &env),
+            Some(PathBuf::from("/u/AppData/Local/Android/Sdk"))
+        );
+    }
+
+    #[test]
+    fn sdk_scripts_are_batch_files_on_windows() {
+        assert_eq!(Os::Windows.script_name("avdmanager"), "avdmanager.bat");
+        assert_eq!(Os::Linux.script_name("avdmanager"), "avdmanager");
+        assert_eq!(Os::MacOs.script_name("avdmanager"), "avdmanager");
     }
 
     #[test]

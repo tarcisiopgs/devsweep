@@ -116,7 +116,7 @@ pub fn all_scanners(home: &std::path::Path, os: Os) -> Vec<Box<dyn Scanner>> {
         Box::new(worktrees::Worktrees),
         Box::new(worktrees::AgentWorktrees::for_home(home)),
         Box::new(ios::Ios),
-        Box::new(android::Android::detect(home)),
+        Box::new(android::Android::detect(home, os)),
         Box::new(docker::Docker),
         Box::new(xcode::Xcode),
         Box::new(homebrew::Homebrew),
