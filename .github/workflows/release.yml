@@ -62,7 +62,14 @@ jobs:
             *.zip) 7z a "$archive" "$name" >/dev/null ;;
             *) tar -cJf "$archive" "$name" ;;
           esac
-          shasum -a 256 "$archive" > "$archive.sha256"
+          # `shasum` is missing from the Windows runner's bash, `sha256sum` from
+          # macOS; the line is written by hand so it reads the same everywhere.
+          if command -v sha256sum >/dev/null; then
+            sum=$(sha256sum "$archive" | cut -d " " -f 1)
+          else
+            sum=$(shasum -a 256 "$archive" | cut -d " " -f 1)
+          fi
+          printf "%s  %s\n" "$sum" "$archive" > "$archive.sha256"
           gh release upload "$TAG" "$archive" "$archive.sha256" --clobber
 
   npm:
