@@ -416,7 +416,7 @@ impl Scanner for AgentWorktrees {
                 if lock(&ctx.seen_worktrees).contains(&wt) {
                     continue;
                 }
-                let main = match main_repo(&wt) {
+                let main = match main_repo(ctx, &wt) {
                     MainRepo::Found(main) => Some(main),
                     MainRepo::Gone => None,
                     MainRepo::Unknown => {
@@ -466,7 +466,7 @@ enum MainRepo {
 
 /// Owner of a linked worktree. Only a missing `gitdir:` target counts as
 /// gone; any git failure is unknown, never a reason to delete the folder.
-fn main_repo(wt: &Path) -> MainRepo {
+fn main_repo(ctx: &ScanCtx, wt: &Path) -> MainRepo {
     let Ok(dotgit) = std::fs::read_to_string(wt.join(".git")) else {
         return MainRepo::Unknown;
     };
@@ -486,7 +486,9 @@ fn main_repo(wt: &Path) -> MainRepo {
     // or an unmounted volume says nothing about the repository.
     match std::fs::exists(&gitdir) {
         Ok(true) => {}
-        Ok(false) if volume_mounted(&gitdir) => return MainRepo::Gone,
+        Ok(false) if ctx.os.volume_mounted(&gitdir, &ctx.mounts, &|p| p.is_dir()) => {
+            return MainRepo::Gone;
+        }
         _ => return MainRepo::Unknown,
     }
     let Some(common) = git(
@@ -504,19 +506,6 @@ fn main_repo(wt: &Path) -> MainRepo {
     } else {
         // Bare repository: git commands run inside it directly.
         MainRepo::Found(common)
-    }
-}
-
-/// False when `path` lives on a volume under `/Volumes` that is not mounted.
-fn volume_mounted(path: &Path) -> bool {
-    let mut parts = path.components();
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(std::path::Component::RootDir), Some(v), Some(name))
-            if v.as_os_str() == "Volumes" =>
-        {
-            Path::new("/Volumes").join(name).is_dir()
-        }
-        _ => true,
     }
 }
 
@@ -950,6 +939,37 @@ mod tests {
         assert!(items[0].lock.is_some());
         assert!(!items[0].safe);
         assert!(!matches!(items[0].removal, Removal::RemoveDir(_)));
+    }
+
+    /// An unmounted disk leaves the `gitdir:` target missing without the
+    /// repository being gone: the worktree must never become a folder to
+    /// delete.
+    #[test]
+    fn worktree_of_a_repo_on_an_unmounted_linux_disk_is_unknown_not_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(d.path()).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        let wt = agent_root.join("w1");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            wt.join(".git"),
+            "gitdir: /mnt/devsweep-absent-disk/r/.git/worktrees/w1\n",
+        )
+        .unwrap();
+        let scan = |os| {
+            run_agent(
+                &ctx(&home.join("elsewhere"), &home, InUse::default()).with_os(os),
+                vec![agent_root.clone()],
+            )
+        };
+        let items = scan(crate::platform::Os::Linux);
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].status.contains(&Status::Broken));
+        assert!(items[0].lock.is_some());
+        assert!(!matches!(items[0].removal, Removal::RemoveDir(_)));
+        // On macOS `/mnt` is a plain folder: the repository really is gone.
+        let items = scan(crate::platform::Os::MacOs);
+        assert_eq!(items[0].status, vec![Status::Broken]);
     }
 
     #[test]

@@ -125,6 +125,40 @@ impl Os {
             .collect()
     }
 
+    /// False when `path` sits on a volume that is not there right now: its
+    /// absence then says nothing about what it holds. `mounts` are the
+    /// current mount points ([`mount_points`]) and `exists` tells whether a
+    /// volume root is present.
+    pub fn volume_mounted(
+        self,
+        path: &Path,
+        mounts: &[PathBuf],
+        exists: &dyn Fn(&Path) -> bool,
+    ) -> bool {
+        match self {
+            Os::MacOs => {
+                let mut parts = path.components();
+                match (parts.next(), parts.next(), parts.next()) {
+                    (Some(std::path::Component::RootDir), Some(v), Some(name))
+                        if v.as_os_str() == "Volumes" =>
+                    {
+                        exists(&Path::new("/Volumes").join(name))
+                    }
+                    _ => true,
+                }
+            }
+            Os::Linux => {
+                // Where removable and extra disks get mounted. An empty
+                // folder left there by an unmounted disk still exists, so
+                // only the mount table can tell.
+                const REMOVABLE: [&str; 3] = ["/mnt", "/media", "/run/media"];
+                let removable = |p: &Path| REMOVABLE.iter().any(|root| p.starts_with(root));
+                !removable(path) || mounts.iter().any(|m| removable(m) && path.starts_with(m))
+            }
+            Os::Windows => windows_volume_root(path).is_some_and(|root| exists(&root)),
+        }
+    }
+
     /// Folders directly inside the home folder that the repository walk
     /// does not enter.
     pub fn skip_at_home(self) -> &'static [&'static str] {
@@ -134,6 +168,69 @@ impl Os {
             Os::Windows => &["AppData"],
         }
     }
+}
+
+/// The drive (`D:\`) or network share (`\\server\share\`) a Windows path
+/// lives on, read from its text so the rule holds on any system. git writes
+/// these paths with forward slashes.
+fn windows_volume_root(path: &Path) -> Option<PathBuf> {
+    let text = path.to_str()?.replace('/', "\\");
+    if let Some(rest) = text.strip_prefix("\\\\") {
+        let mut parts = rest.split('\\').filter(|part| !part.is_empty());
+        let (server, share) = (parts.next()?, parts.next()?);
+        return Some(PathBuf::from(format!("\\\\{server}\\{share}\\")));
+    }
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic() => {
+            Some(PathBuf::from(format!("{drive}:\\")))
+        }
+        _ => None,
+    }
+}
+
+/// Current mount points, where the system lists them in a file. Empty
+/// when it does not, or when the list cannot be read.
+pub fn mount_points(os: Os) -> Vec<PathBuf> {
+    match os {
+        Os::Linux => std::fs::read_to_string("/proc/self/mounts")
+            .map(|table| parse_mount_points(&table))
+            .unwrap_or_default(),
+        Os::MacOs | Os::Windows => Vec::new(),
+    }
+}
+
+/// The mount point column of `/proc/self/mounts`, where a space, tab,
+/// newline or backslash in a name is written as a three-digit octal escape.
+pub fn parse_mount_points(table: &str) -> Vec<PathBuf> {
+    table
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(|field| PathBuf::from(unescape_octal(field)))
+        .collect()
+}
+
+fn unescape_octal(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let code = (bytes[i] == b'\\')
+            .then(|| field.get(i + 1..i + 4))
+            .flatten()
+            .and_then(|digits| u8::from_str_radix(digits, 8).ok());
+        match code {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -298,6 +395,96 @@ mod tests {
             Os::Windows
                 .guard_extra_roots(home, &env, Some(cache))
                 .is_empty()
+        );
+    }
+
+    fn mounts(points: &[&str]) -> Vec<PathBuf> {
+        points.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn linux_path_under_an_unmounted_mount_dir_is_not_mounted() {
+        let exists = |_: &Path| true;
+        let plain = mounts(&["/", "/home"]);
+        for path in ["/mnt/disk/r", "/media/u/disk/r", "/run/media/u/disk/r"] {
+            assert!(
+                !Os::Linux.volume_mounted(Path::new(path), &plain, &exists),
+                "{path}"
+            );
+        }
+        let with_disk = mounts(&["/", "/mnt/disk", "/media/u/disk", "/run/media/u/disk"]);
+        for path in ["/mnt/disk/r", "/media/u/disk/r", "/run/media/u/disk/r"] {
+            assert!(
+                Os::Linux.volume_mounted(Path::new(path), &with_disk, &exists),
+                "{path}"
+            );
+        }
+        // Anywhere else is the system's own disk.
+        assert!(Os::Linux.volume_mounted(Path::new("/home/u/r"), &plain, &exists));
+    }
+
+    #[test]
+    fn linux_mount_list_that_could_not_be_read_mounts_nothing_removable() {
+        let exists = |_: &Path| true;
+        assert!(!Os::Linux.volume_mounted(Path::new("/mnt/disk/r"), &[], &exists));
+        assert!(Os::Linux.volume_mounted(Path::new("/home/u/r"), &[], &exists));
+    }
+
+    #[test]
+    fn linux_sibling_mount_does_not_count() {
+        let exists = |_: &Path| true;
+        let other = mounts(&["/", "/mnt/disk2"]);
+        assert!(!Os::Linux.volume_mounted(Path::new("/mnt/disk/r"), &other, &exists));
+    }
+
+    #[test]
+    fn windows_missing_drive_is_not_mounted() {
+        let gone = |_: &Path| false;
+        let there = |p: &Path| p == Path::new("D:\\");
+        for path in ["D:\\r\\.git", "D:/r/.git", "d:\\r"] {
+            assert!(
+                !Os::Windows.volume_mounted(Path::new(path), &[], &gone),
+                "{path}"
+            );
+        }
+        assert!(Os::Windows.volume_mounted(Path::new("D:\\r\\.git"), &[], &there));
+        assert!(Os::Windows.volume_mounted(Path::new("D:/r/.git"), &[], &there));
+    }
+
+    #[test]
+    fn windows_network_share_is_checked_by_its_root() {
+        let share = |p: &Path| p == Path::new("\\\\nas\\code\\");
+        let gone = |_: &Path| false;
+        let path = Path::new("\\\\nas\\code\\r\\.git");
+        assert!(Os::Windows.volume_mounted(path, &[], &share));
+        assert!(!Os::Windows.volume_mounted(path, &[], &gone));
+    }
+
+    /// A path whose volume cannot be told is not known to be mounted.
+    #[test]
+    fn windows_path_without_a_volume_is_not_mounted() {
+        let exists = |_: &Path| true;
+        assert!(!Os::Windows.volume_mounted(Path::new("r\\.git"), &[], &exists));
+    }
+
+    #[test]
+    fn macos_rule_is_unchanged() {
+        let none = |_: &Path| false;
+        let disk = |p: &Path| p == Path::new("/Volumes/Disk");
+        assert!(!Os::MacOs.volume_mounted(Path::new("/Volumes/Disk/r"), &[], &none));
+        assert!(Os::MacOs.volume_mounted(Path::new("/Volumes/Disk/r"), &[], &disk));
+        assert!(Os::MacOs.volume_mounted(Path::new("/Users/u/r"), &[], &none));
+    }
+
+    #[test]
+    fn parses_mount_points() {
+        let table = "sysfs /sys sysfs rw,nosuid 0 0\n\
+                     /dev/sda1 / ext4 rw 0 0\n\
+                     /dev/sdb1 /media/u/My\\040Disk ext4 rw 0 0\n\
+                     garbage\n";
+        assert_eq!(
+            parse_mount_points(table),
+            mounts(&["/sys", "/", "/media/u/My Disk"])
         );
     }
 

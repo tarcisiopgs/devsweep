@@ -53,6 +53,8 @@ pub struct ScanCtx {
     pub inuse: InUse,
     /// The system whose rules the scanners follow.
     pub os: Os,
+    /// Mount points at scan time, where the system lists them.
+    pub mounts: Vec<PathBuf>,
     /// Worktree paths already reported by the folder scan.
     pub seen_worktrees: Mutex<HashSet<PathBuf>>,
     worktrees_done: (Mutex<bool>, Condvar),
@@ -66,6 +68,7 @@ impl ScanCtx {
             home,
             inuse,
             os: Os::current(),
+            mounts: crate::platform::mount_points(Os::current()),
             seen_worktrees: Mutex::new(HashSet::new()),
             worktrees_done: (Mutex::new(false), Condvar::new()),
             ids: AtomicU64::new(1),
