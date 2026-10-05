@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCodeâ
 
 ## What this is
 
-devsweep is a Rust + ratatui terminal UI for macOS that finds what a developer's Mac accumulates and removes what the user picks: project build artifacts and app builds (`.ipa`, `.apk`, `.aab`), git worktrees (including the ones coding agents leave behind) and the merged branches they leave in the repository, iOS simulators and runtimes, Android AVDs and system images, Docker leftovers, dev tool caches, Xcode data and Homebrew cleanup.
+devsweep is a Rust + ratatui terminal UI for macOS and Linux that finds what a developer's machine accumulates and removes what the user picks: project build artifacts and app builds (`.ipa`, `.apk`, `.aab`), git worktrees (including the ones coding agents leave behind) and the merged branches they leave in the repository, iOS simulators and runtimes, Android AVDs and system images, Docker leftovers, dev tool caches, Xcode data, Homebrew cleanup and the Trash. iOS, Xcode and Homebrew only exist on macOS.
 
 It deletes user data. **Correctness of what can be selected and removed outranks every other concern**, including speed and features.
 
@@ -19,10 +19,11 @@ cargo fmt                                    # CI runs cargo fmt --check
 cargo insta review                           # accept or reject changed TUI snapshots
 cargo run -- ~/some/folder                   # run the TUI against a folder
 scripts/test-linux.sh                        # the suite on Linux, in a container, as a regular user (needs Docker)
+scripts/build-linux.sh                       # the static Linux release binary, in the same container
 prek install -t pre-commit -t pre-push       # git hooks: fmt + clippy on commit, tests on push
 ```
 
-CI (`.github/workflows/ci.yml`) runs on `macos-latest` for every pull request, in separate jobs: Lint (fmt and clippy), Typecheck (`cargo check`), Test, and Build (the release build for both macOS targets). The `check` job only passes when all of them pass, and it is the required status check on `main`.
+CI (`.github/workflows/ci.yml`) runs for every pull request, in separate jobs: Lint (fmt and clippy), Typecheck (`cargo check`) and Test, each on `macos-latest` and `ubuntu-latest`, and Build (the release build for the two macOS and the two Linux targets). The `check` job only passes when all of them pass, and it is the required status check on `main`.
 
 Never confirm a removal (`y` on the review screen) while testing against a real machine unless the user asks for it in that conversation.
 
@@ -106,7 +107,9 @@ Rules live in `catalog/*.toml`, one file per ecosystem. The schema and the meani
 
 `.github/workflows/release.yml` runs on `release: published`:
 - it checks that the tag matches `Cargo.toml`;
-- it builds `aarch64-apple-darwin` and `x86_64-apple-darwin` and attaches the archives to the release;
-- it publishes `@tarcisiopgs/devsweep`, `devsweep-darwin-arm64` and `devsweep-darwin-x64` to npm through trusted publishing (OIDC).
+- it builds `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-musl` and `x86_64-unknown-linux-musl` and attaches the archives to the release;
+- it publishes `@tarcisiopgs/devsweep` and the platform packages `devsweep-darwin-arm64`, `devsweep-darwin-x64`, `devsweep-linux-arm64` and `devsweep-linux-x64` to npm through trusted publishing (OIDC).
+
+Each platform package needs its own trusted publisher on npmjs.com (repository `tarcisiopgs/devsweep`, workflow `release.yml`), configured once after the package exists.
 
 No npm token exists. npm trusts the workflow by its file name, so do not rename `release.yml`.

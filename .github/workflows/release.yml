@@ -1,7 +1,7 @@
 name: Release
 
 # Publishing a GitHub Release (e.g. `gh release create v0.2.0 --generate-notes`)
-# builds the macOS binaries, attaches them to the release and publishes the npm
+# builds the macOS and Linux binaries, attaches them to the release and publishes the npm
 # packages through trusted publishing (OIDC). npm trusts this file by name.
 on:
   release:
@@ -12,12 +12,17 @@ permissions: {}
 jobs:
   build:
     name: Build ${{ matrix.target }}
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     strategy:
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          # Static binaries: one file per architecture runs on any distribution.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
     env:
       TAG: ${{ github.event.release.tag_name }}
       GH_TOKEN: ${{ github.token }}
@@ -80,15 +85,20 @@ jobs:
           }
           mkdir dl
           gh release download "$TAG" --pattern 'devsweep-*.tar.xz' --dir dl
-          for pair in "arm64:aarch64-apple-darwin" "x64:x86_64-apple-darwin"; do
-            ARCH="${pair%%:*}"; TARGET="${pair#*:}"
+          for entry in \
+            "darwin:arm64:aarch64-apple-darwin" \
+            "darwin:x64:x86_64-apple-darwin" \
+            "linux:arm64:aarch64-unknown-linux-musl" \
+            "linux:x64:x86_64-unknown-linux-musl"; do
+            IFS=: read -r OS ARCH TARGET <<< "$entry"
+            PKG="pkg-$OS-$ARCH"
             tar -xJf "dl/devsweep-$TARGET.tar.xz" -C dl
-            mkdir -p "pkg-$ARCH/bin"
-            cp "dl/devsweep-$TARGET/devsweep" "pkg-$ARCH/bin/devsweep"
-            chmod +x "pkg-$ARCH/bin/devsweep"
-            ARCH="$ARCH" VERSION="$VERSION" envsubst < npm/platform/package.json.tmpl > "pkg-$ARCH/package.json"
-            cp LICENSE "pkg-$ARCH/"
-            (cd "pkg-$ARCH" && publish)
+            mkdir -p "$PKG/bin"
+            cp "dl/devsweep-$TARGET/devsweep" "$PKG/bin/devsweep"
+            chmod +x "$PKG/bin/devsweep"
+            OS="$OS" ARCH="$ARCH" VERSION="$VERSION" envsubst < npm/platform/package.json.tmpl > "$PKG/package.json"
+            cp LICENSE "$PKG/"
+            (cd "$PKG" && publish)
           done
           cd npm/devsweep
           cp ../../LICENSE ../../README.md .
@@ -106,5 +116,7 @@ jobs:
           NODE
           npm pkg set version="$VERSION" \
             "optionalDependencies.devsweep-darwin-arm64=$VERSION" \
-            "optionalDependencies.devsweep-darwin-x64=$VERSION"
+            "optionalDependencies.devsweep-darwin-x64=$VERSION" \
+            "optionalDependencies.devsweep-linux-arm64=$VERSION" \
+            "optionalDependencies.devsweep-linux-x64=$VERSION"
           publish

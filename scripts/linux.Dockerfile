@@ -4,7 +4,7 @@
 FROM rust:1-bookworm
 
 RUN rustup component add clippy rustfmt \
-    && rustup target add x86_64-pc-windows-gnu \
+    && rustup target add x86_64-pc-windows-gnu "$(uname -m)-unknown-linux-musl" \
     && useradd --create-home --uid 1000 dev \
     && mkdir -p /target /home/dev/.cargo \
     && chown -R dev:dev /target /home/dev/.cargo

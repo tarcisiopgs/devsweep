@@ -11,8 +11,11 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint
-    runs-on: macos-latest
+    name: Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,8 +26,11 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
 
   typecheck:
-    name: Typecheck
-    runs-on: macos-latest
+    name: Typecheck (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,8 +38,11 @@ jobs:
       - run: cargo check --all-targets --locked
 
   test:
-    name: Test
-    runs-on: macos-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,10 +52,15 @@ jobs:
   # Same release build as release.yml, so a PR cannot break the next release.
   build:
     name: Build ${{ matrix.target }}
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          # Static binaries: one file per architecture runs on any distribution.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

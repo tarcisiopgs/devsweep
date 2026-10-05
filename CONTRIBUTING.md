@@ -71,4 +71,4 @@ TUI changes come with `insta` snapshots: run `cargo insta review` and check ever
    gh release create v0.2.0 --generate-notes
    ```
 
-The `Release` workflow checks that the tag matches `Cargo.toml`, attaches the macOS archives to the release and publishes `@tarcisiopgs/devsweep`, `devsweep-darwin-arm64` and `devsweep-darwin-x64` to npm through trusted publishing. No npm token is involved.
+The `Release` workflow checks that the tag matches `Cargo.toml`, attaches the macOS and Linux archives to the release and publishes `@tarcisiopgs/devsweep` and its platform packages (`devsweep-darwin-arm64`, `devsweep-darwin-x64`, `devsweep-linux-arm64`, `devsweep-linux-x64`) to npm through trusted publishing. No npm token is involved.
