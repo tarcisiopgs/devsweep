@@ -1,7 +1,7 @@
 name: Release
 
 # Publishing a GitHub Release (e.g. `gh release create v0.2.0 --generate-notes`)
-# builds the macOS and Linux binaries, attaches them to the release and publishes the npm
+# builds the macOS, Linux and Windows binaries, attaches them to the release and publishes the npm
 # packages through trusted publishing (OIDC). npm trusts this file by name.
 on:
   release:
@@ -23,9 +23,16 @@ jobs:
           # Static binaries: one file per architecture runs on any distribution.
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest }
     env:
       TAG: ${{ github.event.release.tag_name }}
       GH_TOKEN: ${{ github.token }}
+      TARGET: ${{ matrix.target }}
+    # The steps are written for bash, which the Windows runner also has.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -38,17 +45,25 @@ jobs:
             echo "::error::Release tag $TAG does not match Cargo.toml version $version"
             exit 1
           fi
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - run: cargo build --release --locked --target "$TARGET"
       - name: Attach the archive to the release
         run: |
-          name="devsweep-${{ matrix.target }}"
+          name="devsweep-$TARGET"
+          # Windows gets devsweep.exe in a zip; the others a tar.xz.
+          case "$TARGET" in
+            *windows*) bin=devsweep.exe; archive="$name.zip" ;;
+            *) bin=devsweep; archive="$name.tar.xz" ;;
+          esac
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/devsweep" README.md LICENSE "$name/"
+          cp "target/$TARGET/release/$bin" README.md LICENSE "$name/"
           mkdir "$name/assets"
           cp assets/devsweep-banner.webp "$name/assets/"
-          tar -cJf "$name.tar.xz" "$name"
-          shasum -a 256 "$name.tar.xz" > "$name.tar.xz.sha256"
-          gh release upload "$TAG" "$name.tar.xz" "$name.tar.xz.sha256" --clobber
+          case "$archive" in
+            *.zip) 7z a "$archive" "$name" >/dev/null ;;
+            *) tar -cJf "$archive" "$name" ;;
+          esac
+          shasum -a 256 "$archive" > "$archive.sha256"
+          gh release upload "$TAG" "$archive" "$archive.sha256" --clobber
 
   npm:
     name: Publish to npm
@@ -84,18 +99,26 @@ jobs:
             fi
           }
           mkdir dl
-          gh release download "$TAG" --pattern 'devsweep-*.tar.xz' --dir dl
+          gh release download "$TAG" --pattern 'devsweep-*.tar.xz' --pattern 'devsweep-*.zip' --dir dl
           for entry in \
             "darwin:arm64:aarch64-apple-darwin" \
             "darwin:x64:x86_64-apple-darwin" \
             "linux:arm64:aarch64-unknown-linux-musl" \
-            "linux:x64:x86_64-unknown-linux-musl"; do
+            "linux:x64:x86_64-unknown-linux-musl" \
+            "win32:arm64:aarch64-pc-windows-msvc" \
+            "win32:x64:x86_64-pc-windows-msvc"; do
             IFS=: read -r OS ARCH TARGET <<< "$entry"
             PKG="pkg-$OS-$ARCH"
-            tar -xJf "dl/devsweep-$TARGET.tar.xz" -C dl
+            if [ "$OS" = win32 ]; then
+              BIN=devsweep.exe
+              unzip -q "dl/devsweep-$TARGET.zip" -d dl
+            else
+              BIN=devsweep
+              tar -xJf "dl/devsweep-$TARGET.tar.xz" -C dl
+            fi
             mkdir -p "$PKG/bin"
-            cp "dl/devsweep-$TARGET/devsweep" "$PKG/bin/devsweep"
-            chmod +x "$PKG/bin/devsweep"
+            cp "dl/devsweep-$TARGET/$BIN" "$PKG/bin/$BIN"
+            chmod +x "$PKG/bin/$BIN"
             OS="$OS" ARCH="$ARCH" VERSION="$VERSION" envsubst < npm/platform/package.json.tmpl > "$PKG/package.json"
             cp LICENSE "$PKG/"
             (cd "$PKG" && publish)
@@ -118,5 +141,7 @@ jobs:
             "optionalDependencies.devsweep-darwin-arm64=$VERSION" \
             "optionalDependencies.devsweep-darwin-x64=$VERSION" \
             "optionalDependencies.devsweep-linux-arm64=$VERSION" \
-            "optionalDependencies.devsweep-linux-x64=$VERSION"
+            "optionalDependencies.devsweep-linux-x64=$VERSION" \
+            "optionalDependencies.devsweep-win32-arm64=$VERSION" \
+            "optionalDependencies.devsweep-win32-x64=$VERSION"
           publish

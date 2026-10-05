@@ -8,12 +8,12 @@
     "url": "git+https://github.com/tarcisiopgs/devsweep.git"
   },
   "homepage": "https://github.com/tarcisiopgs/devsweep",
-  "keywords": ["cleanup", "disk", "macos", "linux", "tui", "node_modules", "worktree", "simulator", "docker"],
+  "keywords": ["cleanup", "disk", "macos", "linux", "windows", "tui", "node_modules", "worktree", "simulator", "docker"],
   "bin": {
     "devsweep": "bin/devsweep.js"
   },
   "files": ["bin"],
-  "os": ["darwin", "linux"],
+  "os": ["darwin", "linux", "win32"],
   "engines": {
     "node": ">=18"
   },
@@ -21,6 +21,8 @@
     "devsweep-darwin-arm64": "0.0.0",
     "devsweep-darwin-x64": "0.0.0",
     "devsweep-linux-arm64": "0.0.0",
-    "devsweep-linux-x64": "0.0.0"
+    "devsweep-linux-x64": "0.0.0",
+    "devsweep-win32-arm64": "0.0.0",
+    "devsweep-win32-x64": "0.0.0"
   }
 }

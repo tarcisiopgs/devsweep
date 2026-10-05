@@ -7,7 +7,7 @@ description = "Find and remove what a developer's machine accumulates: build art
 license = "MIT"
 repository = "https://github.com/tarcisiopgs/devsweep"
 homepage = "https://github.com/tarcisiopgs/devsweep"
-keywords = ["cleanup", "disk", "macos", "linux", "tui"]
+keywords = ["cleanup", "disk", "macos", "linux", "windows"]
 categories = ["command-line-utilities"]
 readme = "README.md"
 
