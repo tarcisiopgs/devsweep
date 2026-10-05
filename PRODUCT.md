@@ -4,7 +4,7 @@
 
 ## Platform
 
-terminal (TUI, macOS and Linux). The schema's `web`/`ios`/`android`/`adaptive` values do not apply; this is a ratatui terminal app.
+terminal (TUI; macOS, Linux and, experimentally, Windows). The schema's `web`/`ios`/`android`/`adaptive` values do not apply; this is a ratatui terminal app.
 
 ## Stack
 
@@ -12,7 +12,7 @@ Rust + ratatui + crossterm, distributed on npm as per-platform binaries via carg
 
 ## Users
 
-Developers on macOS or Linux who juggle many projects, package managers, mobile toolchains and coding agents, and periodically run out of disk. The primary user is the author, who today runs `npx npkill` and `npx mac-cleaner-cli` back to back to reclaim space.
+Developers on macOS, Linux or Windows who juggle many projects, package managers, mobile toolchains and coding agents, and periodically run out of disk. The primary user is the author, who today runs `npx npkill` and `npx mac-cleaner-cli` back to back to reclaim space.
 
 ## Product Purpose
 
@@ -35,7 +35,7 @@ Run from a terminal inside a projects folder (e.g. `~/Workspace`). The UI shows 
 - A branch left by a removed worktree is offered for deletion only when its work is verifiably in the default branch (merged or squash-merged).
 - Clean-room with respect to Mole: devsweep is MIT and never reads or ports Mole's GPL source; its cache catalog is built from documented facts and observed paths, each rule recording its source.
 - Dev cache rules are declarative data (TOML), so contributors can add a rule without touching the engine.
-- macOS and Linux; iOS, Xcode and Homebrew sources exist only on macOS. No mouse, no config file, no non-interactive mode.
+- macOS, Linux and Windows (experimental: validated by automated tests only); iOS, Xcode and Homebrew sources exist only on macOS. No mouse, no config file, no non-interactive mode.
 
 ## Brand Commitments
 
