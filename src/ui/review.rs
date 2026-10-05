@@ -129,7 +129,7 @@ pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
                 body.width,
             ));
             lines.push(Line::styled(
-                format!("    {}", item.removal.describe()),
+                format!("    {}", item.removal.describe_for(app.os)),
                 dim(),
             ));
         }
