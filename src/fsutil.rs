@@ -36,7 +36,21 @@ fn disk_usage(meta: &std::fs::Metadata) -> u64 {
     meta.len()
 }
 
+/// Free bytes on the volume holding `path`: the disk whose mount point is
+/// the longest one above it.
+#[cfg(windows)]
+pub fn disk_free(path: &Path) -> Option<u64> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|disk| path.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().as_os_str().len())
+        .map(|disk| disk.available_space())
+}
+
 /// Free bytes on the volume holding `path`, from `df`.
+#[cfg(not(windows))]
 pub fn disk_free(path: &Path) -> Option<u64> {
     let path = path.to_str()?;
     let out = crate::scan::run_timeout(

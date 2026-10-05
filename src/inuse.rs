@@ -2,6 +2,8 @@
 //! macOS and from `/proc` on Linux.
 
 pub mod linux;
+#[cfg(windows)]
+pub mod windows;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,6 +24,9 @@ struct Proc {
     cwd: PathBuf,
     /// Full command line from `ps`, when known.
     args: String,
+    /// The same command line as separate arguments, where the system
+    /// hands it over that way (a program path may hold spaces).
+    argv: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -31,6 +36,9 @@ pub struct InUse {
     /// Why the process snapshot could not be taken. When set, every path and
     /// every process name counts as busy: an unknown state never unlocks.
     failed: Option<String>,
+    /// Compare paths and names the way Windows does: no case, either
+    /// separator, no `.exe`.
+    windows: bool,
 }
 
 impl InUse {
@@ -56,6 +64,7 @@ impl InUse {
                             name: name.clone(),
                             cwd: PathBuf::from(value),
                             args: String::new(),
+                            argv: Vec::new(),
                         });
                     }
                 }
@@ -135,8 +144,12 @@ impl InUse {
             _ if os != Os::current() => InUse::failed(UNAVAILABLE),
             Os::MacOs => InUse::collect_lsof(),
             Os::Linux => linux::snapshot(Path::new("/proc"), std::process::id()),
+            #[cfg(windows)]
+            Os::Windows => windows::collect(),
+            #[cfg(not(windows))]
             Os::Windows => InUse::failed(UNAVAILABLE),
         };
+        let parsed = parsed.for_os(os);
         match os.home_dir(&crate::platform::process_env) {
             Some(home) => parsed.with_home(home),
             None => parsed,
@@ -174,10 +187,22 @@ impl InUse {
         if let Some(reason) = self.failure() {
             return Some(reason);
         }
+        let at_home = |cwd: &Path| match &self.home {
+            Some(home) if self.windows => windows_key(cwd) == windows_key(home),
+            Some(home) => cwd == home,
+            None => false,
+        };
+        let within = |cwd: &Path| {
+            if self.windows {
+                windows_within(cwd, path)
+            } else {
+                cwd.starts_with(path)
+            }
+        };
         self.procs
             .iter()
-            .filter(|p| p.cwd != Path::new("/") && Some(&p.cwd) != self.home.as_ref())
-            .find(|p| p.cwd.starts_with(path))
+            .filter(|p| p.cwd != Path::new("/") && !at_home(&p.cwd))
+            .find(|p| within(&p.cwd))
             .map(|p| format!("{} · PID {}", p.name, p.pid))
     }
 
@@ -187,12 +212,45 @@ impl InUse {
         if let Some(reason) = self.failure() {
             return Some(reason);
         }
+        let wanted = |candidate: &str| {
+            names.iter().copied().find(|name| {
+                if self.windows {
+                    name.eq_ignore_ascii_case(candidate)
+                } else {
+                    *name == candidate
+                }
+            })
+        };
         self.procs.iter().find_map(|p| {
             std::iter::once(p.name.as_str())
-                .chain(arg_names(&p.args))
-                .find(|n| names.contains(n))
-                .map(|n| format!("{n} · PID {}", p.pid))
+                .chain(arg_names(p, self.windows))
+                .find_map(wanted)
+                .map(|name| format!("{name} · PID {}", p.pid))
         })
+    }
+
+    /// A snapshot of these processes.
+    fn from_procs(mut procs: Vec<Proc>) -> InUse {
+        procs.sort_by_key(|p| p.pid);
+        InUse {
+            procs,
+            ..InUse::default()
+        }
+    }
+
+    /// Compare paths and process names the way `os` does. On Windows a
+    /// process is known without its `.exe`.
+    pub fn for_os(mut self, os: Os) -> InUse {
+        self.windows = os == Os::Windows;
+        if self.windows {
+            for p in &mut self.procs {
+                let stem = p.name.len().saturating_sub(4);
+                if p.name.is_char_boundary(stem) && p.name[stem..].eq_ignore_ascii_case(".exe") {
+                    p.name.truncate(stem);
+                }
+            }
+        }
+        self
     }
 
     /// Lock reason when a process command line contains one of `patterns`.
@@ -209,19 +267,55 @@ impl InUse {
 
 /// Tool names in a command line: the program, and for a script runner
 /// (`node`, `bun`, `deno`) the script it runs, without extension or `-cli`.
-fn arg_names(args: &str) -> impl Iterator<Item = &str> {
-    fn base(t: &str) -> &str {
+fn arg_names(p: &Proc, windows: bool) -> impl Iterator<Item = &str> {
+    fn base(t: &str, windows: bool) -> &str {
         let name = t.rsplit('/').next().unwrap_or(t);
+        let name = match windows {
+            true => name.rsplit('\\').next().unwrap_or(name),
+            false => name,
+        };
         let name = name.split('.').next().unwrap_or(name);
         name.strip_suffix("-cli").unwrap_or(name)
     }
-    let mut tokens = args.split_whitespace();
-    let first = tokens.next().map(base);
-    let script = match first {
-        Some("node" | "bun" | "deno") => tokens.next().filter(|t| !t.starts_with('-')).map(base),
-        _ => None,
+    // Separate arguments when the system gave them; a program path with a
+    // space in it would otherwise be cut in two.
+    let mut tokens: Box<dyn Iterator<Item = &str>> = if p.argv.is_empty() {
+        Box::new(p.args.split_whitespace())
+    } else {
+        Box::new(p.argv.iter().map(String::as_str))
+    };
+    let first = tokens.next().map(|t| base(t, windows));
+    let runs_scripts = first.is_some_and(|name| {
+        ["node", "bun", "deno"].iter().any(|runner| match windows {
+            true => runner.eq_ignore_ascii_case(name),
+            false => *runner == name,
+        })
+    });
+    let script = match runs_scripts {
+        true => tokens
+            .next()
+            .filter(|t| !t.starts_with('-'))
+            .map(|t| base(t, windows)),
+        false => None,
     };
     first.into_iter().chain(script)
+}
+
+/// A Windows path in the one spelling used to compare it: no verbatim
+/// prefix, backslashes, lower case, no trailing separator.
+fn windows_key(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let text = text.strip_prefix("\\\\?\\").unwrap_or(&text);
+    text.trim_end_matches('\\').to_lowercase()
+}
+
+/// Whether `cwd` is `path` or a folder below it, on Windows.
+fn windows_within(cwd: &Path, path: &Path) -> bool {
+    let (cwd, path) = (windows_key(cwd), windows_key(path));
+    cwd == path
+        || cwd
+            .strip_prefix(&path)
+            .is_some_and(|rest| rest.starts_with('\\'))
 }
 
 /// This process and its ancestors (npx, node, the shell…), up to launchd.
@@ -336,6 +430,90 @@ mod tests {
     fn empty_lsof_output_counts_as_a_failed_check() {
         let iu = InUse::from_output(Ok(String::new()));
         assert!(iu.lock_for(Path::new("/Users/u/app")).is_some());
+    }
+
+    fn proc(pid: u32, name: &str, cwd: &str, argv: &[&str]) -> Proc {
+        Proc {
+            pid,
+            name: name.to_string(),
+            cwd: PathBuf::from(cwd),
+            args: argv.join(" "),
+            argv: argv.iter().map(|a| a.to_string()).collect(),
+        }
+    }
+
+    fn windows(procs: Vec<Proc>) -> InUse {
+        InUse::from_procs(procs).for_os(Os::Windows)
+    }
+
+    /// Windows paths do not care about case: the scan and the process may
+    /// spell the same folder differently.
+    #[test]
+    fn windows_paths_match_ignoring_case() {
+        let iu = windows(vec![proc(7, "node.exe", "c:\\users\\u\\proj\\app", &[])]);
+        assert_eq!(
+            iu.lock_for(Path::new("C:\\Users\\U\\proj")).as_deref(),
+            Some("node · PID 7")
+        );
+        assert_eq!(iu.lock_for(Path::new("C:\\Users\\U\\other")), None);
+    }
+
+    #[test]
+    fn windows_paths_match_across_separators() {
+        let iu = windows(vec![proc(7, "node.exe", "C:/Users/u/proj/app", &[])]);
+        assert!(iu.lock_for(Path::new("C:\\Users\\u\\proj")).is_some());
+        let iu = windows(vec![proc(7, "node.exe", "C:\\Users\\u\\proj", &[])]);
+        assert!(iu.lock_for(Path::new("C:/Users/u/proj/")).is_some());
+    }
+
+    #[test]
+    fn windows_verbatim_and_plain_paths_are_the_same_folder() {
+        let iu = windows(vec![proc(7, "node.exe", "\\\\?\\C:\\Users\\u\\proj", &[])]);
+        assert!(iu.lock_for(Path::new("C:\\Users\\u\\proj")).is_some());
+    }
+
+    #[test]
+    fn windows_sibling_prefix_does_not_lock() {
+        let iu = windows(vec![proc(7, "node.exe", "C:\\Users\\u\\app-2", &[])]);
+        assert_eq!(iu.lock_for(Path::new("C:\\Users\\u\\app")), None);
+    }
+
+    #[test]
+    fn windows_home_cwd_locks_nothing() {
+        let iu = windows(vec![proc(7, "pwsh.exe", "c:\\users\\u", &[])]).with_home("C:\\Users\\u");
+        assert_eq!(iu.lock_for(Path::new("C:\\Users\\u")), None);
+    }
+
+    #[test]
+    fn windows_process_names_drop_exe() {
+        let iu = windows(vec![proc(7, "Java.EXE", "C:\\x", &[])]);
+        assert_eq!(iu.busy(&["java"]).as_deref(), Some("java · PID 7"));
+        assert_eq!(iu.busy(&["jav"]), None);
+    }
+
+    /// The program path has a space in it; the arguments arrive as a list,
+    /// so the script it runs is still the second one.
+    #[test]
+    fn windows_script_runner_is_recognised() {
+        let iu = windows(vec![proc(
+            7,
+            "node.exe",
+            "C:\\x",
+            &[
+                "C:\\Program Files\\nodejs\\node.exe",
+                "C:\\x\\node_modules\\pnpm\\bin\\pnpm.cjs",
+                "dev",
+            ],
+        )]);
+        assert_eq!(iu.busy(&["pnpm"]).as_deref(), Some("pnpm · PID 7"));
+        assert_eq!(iu.busy(&["yarn"]), None);
+    }
+
+    #[test]
+    fn unix_paths_stay_case_sensitive() {
+        let iu = InUse::from_procs(vec![proc(7, "node", "/home/u/Proj", &[])]).for_os(Os::Linux);
+        assert_eq!(iu.lock_for(Path::new("/home/u/proj")), None);
+        assert_eq!(iu.busy(&["Node"]), None);
     }
 
     /// A system this binary cannot inspect is an unknown state, not a free one.
