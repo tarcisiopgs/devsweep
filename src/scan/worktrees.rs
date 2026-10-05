@@ -285,7 +285,12 @@ fn agent_label(home: &Path, wt: &Path) -> Option<String> {
     AGENT_ROOTS.iter().find_map(|root| {
         let rel = wt.strip_prefix(home.join(root)).ok()?;
         let short = root.split('/').next()?.trim_start_matches('.');
-        Some(format!("{short}/{}", rel.display()))
+        // A name, not a path: `/` on every system.
+        let rel: Vec<_> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect();
+        Some(format!("{short}/{}", rel.join("/")))
     })
 }
 

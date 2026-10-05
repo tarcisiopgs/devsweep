@@ -402,19 +402,12 @@ mod tests {
         fs::write(bin.join("avdmanager"), "").unwrap();
         let items = scan(&a, "");
         let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
-        assert_eq!(
-            avd.removal,
-            Removal::Command {
-                argv: vec![
-                    bin.join("avdmanager").display().to_string(),
-                    "delete".into(),
-                    "avd".into(),
-                    "-n".into(),
-                    "Pixel_8_API_34".into()
-                ],
-                cwd: None,
-            }
-        );
+        let Removal::Command { argv, cwd: None } = &avd.removal else {
+            panic!("{:?}", avd.removal);
+        };
+        // Compared as a path: the separators may differ in spelling.
+        assert_eq!(Path::new(&argv[0]), bin.join("avdmanager"));
+        assert_eq!(argv[1..], ["delete", "avd", "-n", "Pixel_8_API_34"]);
     }
 
     #[test]
