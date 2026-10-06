@@ -174,7 +174,7 @@ fn remove_paths(paths: &[PathBuf], exec: &dyn Executor, guard: &Guard) -> Result
 
 /// Remove every item in order. A failure never stops the batch.
 pub fn run_removals(
-    items: Vec<Item>,
+    items: &[Item],
     exec: &dyn Executor,
     guard: &Guard,
     recheck: &dyn Fn(&Item) -> Result<(), RemoveError>,
@@ -189,7 +189,7 @@ pub fn run_removals(
 /// is set. The item in progress always finishes: stopping a removal halfway
 /// would leave it half deleted.
 pub fn run_removals_until(
-    items: Vec<Item>,
+    items: &[Item],
     exec: &dyn Executor,
     guard: &Guard,
     recheck: &dyn Fn(&Item) -> Result<(), RemoveError>,
@@ -198,7 +198,7 @@ pub fn run_removals_until(
     tx: Sender<RemoveEvent>,
 ) {
     let mut repos_to_prune = BTreeSet::new();
-    for item in &items {
+    for item in items {
         if stop.load(std::sync::atomic::Ordering::SeqCst) {
             let _ = tx.send(RemoveEvent::Err(item.id, RemoveError::Skipped));
             continue;
@@ -311,8 +311,7 @@ pub fn default_recheck(snapshot: impl Fn() -> InUse) -> impl Fn(&Item) -> Result
                 None,
                 GIT_TIMEOUT,
             )
-            .map(|out| !out.trim().is_empty())
-            .unwrap_or(true);
+            .map_or(true, |out| !out.trim().is_empty());
             // New ignored files (`.env`) would go with the worktree unseen.
             let shown = item.status.iter().find_map(|s| match s {
                 Status::Ignored(n) => Some(*n),
@@ -409,7 +408,7 @@ mod tests {
         recheck: &dyn Fn(&Item) -> Result<(), RemoveError>,
     ) -> Vec<RemoveEvent> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        run_removals(items, exec, g, recheck, &|_, _| None, tx);
+        run_removals(&items, exec, g, recheck, &|_, _| None, tx);
         rx.iter().collect()
     }
 
@@ -450,7 +449,7 @@ mod tests {
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         run_removals(
-            vec![worktree_item(&h, 1, "w1")],
+            &[worktree_item(&h, 1, "w1")],
             &exec,
             &guard(&h),
             &ok,
@@ -485,7 +484,7 @@ mod tests {
         ] {
             let (tx, rx) = crossbeam_channel::unbounded();
             run_removals(
-                vec![worktree_item(&h, 1, "w1")],
+                &[worktree_item(&h, 1, "w1")],
                 exec,
                 &guard(&h),
                 recheck,
@@ -510,7 +509,7 @@ mod tests {
         );
         let leftover = |_: &Path, _: &Path| -> Option<LeftoverBranch> { panic!("asked") };
         let (tx, rx) = crossbeam_channel::unbounded();
-        run_removals(vec![it], &exec, &guard(&h), &ok, &leftover, tx);
+        run_removals(&[it], &exec, &guard(&h), &ok, &leftover, tx);
         assert!(rx.iter().any(|e| matches!(e, RemoveEvent::Ok(1, _))));
     }
 
@@ -656,7 +655,7 @@ mod tests {
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         run_removals_until(
-            items,
+            &items,
             &exec,
             &guard(&h),
             &stop_after_first,

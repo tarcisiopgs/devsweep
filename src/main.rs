@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
 
     // ratatui::init installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
-    let result = run_app(&mut terminal, target, home, !cli.no_notify);
+    let result = run_app(&mut terminal, &target, &home, !cli.no_notify);
     ratatui::restore();
     result
 }
@@ -92,7 +92,7 @@ fn start_removal(
     std::thread::spawn(move || {
         let recheck = default_recheck(|| InUse::collect(Os::current()));
         run_removals_until(
-            items,
+            &items,
             &RealExecutor,
             &guard,
             &recheck,
@@ -106,12 +106,12 @@ fn start_removal(
 
 fn run_app(
     terminal: &mut DefaultTerminal,
-    target: PathBuf,
-    home: PathBuf,
+    target: &Path,
+    home: &Path,
     notify: bool,
 ) -> anyhow::Result<()> {
-    let (sources, mut scan_rx) = start_scan(&target, &home);
-    let mut app = App::new(target.clone(), sources);
+    let (sources, mut scan_rx) = start_scan(target, home);
+    let mut app = App::new(target.to_path_buf(), sources);
     app.terminal = terminal_name(std::env::var("TERM_PROGRAM").ok().as_deref());
     let mut remove_rx: Option<(Receiver<RemoveEvent>, Arc<AtomicBool>)> = None;
 
@@ -131,7 +131,7 @@ fn run_app(
             for ev in events {
                 let finished = matches!(ev, RemoveEvent::Finished);
                 if finished {
-                    app.disk_free.1 = disk_free(&home);
+                    app.disk_free.1 = disk_free(home);
                 }
                 let action = app.on_remove(ev);
                 if finished && notify {
@@ -161,8 +161,8 @@ fn run_app(
             Action::None => {}
             Action::Quit => return Ok(()),
             Action::StartRemoval(items) => {
-                app.disk_free.0 = disk_free(&home);
-                remove_rx = Some(start_removal(items, &target, &home));
+                app.disk_free.0 = disk_free(home);
+                remove_rx = Some(start_removal(items, target, home));
             }
             Action::OpenDiskAccessSettings => {
                 // Opens System Settings on Privacy & Security › Full Disk Access.
@@ -179,7 +179,7 @@ fn run_app(
             }
             Action::Rescan => {
                 remove_rx = None;
-                scan_rx = start_scan(&target, &home).1;
+                scan_rx = start_scan(target, home).1;
             }
         }
     }

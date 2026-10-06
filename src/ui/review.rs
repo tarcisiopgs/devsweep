@@ -114,9 +114,7 @@ pub fn draw_review(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("merged", green())
             } else {
                 Span::styled(
-                    item.size
-                        .map(format_size_long)
-                        .unwrap_or_else(|| "…".into()),
+                    item.size.map_or_else(|| "…".into(), format_size_long),
                     Style::default().fg(Color::White),
                 )
             };
