@@ -18,8 +18,8 @@ paths = ["~/.npm/_npx"]        # on every system; `~` = home, one `*` allowed
 safe = true                    # preselected? see below
 mode = "clear"                 # remove | clear | children
 busy_when = ["npm", "npx"]     # a running process with this exact name locks the item
-# command = ["npm", "cache", "verify"]   # native command, preferred when the tool offers one
-# requires_bin = "npm"                   # the command is used only when this binary is on PATH
+# command = ["go", "clean", "-cache"]    # native command, preferred when the tool offers one
+# requires_bin = "go"                    # the command is used only when this binary is on PATH
 # path_cmd = ["pnpm", "store", "path"]   # for tools that decide the path at runtime
 source = "docs: https://docs.npmjs.com/cli/commands/npx"
 ```

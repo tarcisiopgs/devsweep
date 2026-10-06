@@ -4,9 +4,10 @@ group = "JavaScript"
 label = "npm cache"
 paths = ["~/.npm/_cacache"]
 paths_windows = ["{localappdata}/npm-cache/_cacache"]
-safe = true
+safe = false
 mode = "clear"
-command = ["npm", "cache", "verify"]
+# Not `npm cache verify`: it keeps everything still valid and frees next to nothing.
+command = ["npm", "cache", "clean", "--force"]
 requires_bin = "npm"
 busy_when = ["npm", "npx"]
 source = "docs: https://docs.npmjs.com/cli/commands/npm-cache and https://docs.npmjs.com/cli/using-npm/config#cache"
