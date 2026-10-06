@@ -200,10 +200,10 @@ fn emit(ctx: &ScanCtx, tx: &Sender<ScanEvent>, path: &Path) {
     let project = owning_project(path, &ctx.target);
     let project_label = match project.strip_prefix(&ctx.target) {
         Ok(rel) if !rel.as_os_str().is_empty() => rel.display().to_string(),
-        _ => project
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| project.display().to_string()),
+        _ => project.file_name().map_or_else(
+            || project.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
     };
     let artifact_rel = path
         .strip_prefix(&project)

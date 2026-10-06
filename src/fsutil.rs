@@ -78,8 +78,7 @@ pub fn parse_df_available(out: &str) -> Option<u64> {
 pub fn days_since(t: SystemTime) -> u32 {
     SystemTime::now()
         .duration_since(t)
-        .map(|d| (d.as_secs() / 86_400) as u32)
-        .unwrap_or(0)
+        .map_or(0, |d| (d.as_secs() / 86_400) as u32)
 }
 
 #[cfg(test)]

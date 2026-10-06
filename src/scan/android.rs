@@ -163,8 +163,7 @@ impl Android {
                     .strip_suffix(".ini")?
                     .to_string();
                 let dir = read_ini(&path, "path")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| self.avd_home.join(format!("{name}.avd")));
+                    .map_or_else(|| self.avd_home.join(format!("{name}.avd")), PathBuf::from);
                 dir.is_dir().then_some((name, dir))
             })
             .collect();

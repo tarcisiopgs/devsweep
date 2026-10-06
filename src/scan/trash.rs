@@ -466,7 +466,7 @@ mod tests {
             let protected = Os::Linux.protected_dirs(home, &no_env);
             let guard = Guard::new(home.to_path_buf(), home.to_path_buf(), protected, vec![]);
             let (tx, rx) = crossbeam_channel::unbounded();
-            run_removals(items, &RealExecutor, &guard, &|_| Ok(()), &|_, _| None, tx);
+            run_removals(&items, &RealExecutor, &guard, &|_| Ok(()), &|_, _| None, tx);
             rx.iter()
                 .find_map(|e| match e {
                     RemoveEvent::Err(_, err) => Some(err),

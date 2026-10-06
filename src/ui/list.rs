@@ -393,10 +393,7 @@ fn item_row(
     } else {
         status.push(Span::raw(" ".repeat(status_w - status_len)));
     }
-    let size = item
-        .size
-        .map(format_size_long)
-        .unwrap_or_else(|| "…".into());
+    let size = item.size.map_or_else(|| "…".into(), format_size_long);
     let value_style = if locked { dim() } else { white() };
     let mut spans = vec![
         check,
