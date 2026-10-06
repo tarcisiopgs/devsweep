@@ -323,7 +323,10 @@ impl Scanner for Worktrees {
 
     fn scan(&self, ctx: &ScanCtx, tx: &Sender<ScanEvent>) -> anyhow::Result<()> {
         let _done = DoneGuard(ctx);
-        for repo in find_repos(ctx) {
+        let (repos, mut linked) = find_repos(ctx);
+        for repo in repos {
+            // Worktrees kept inside the repository (`.claude/worktrees`).
+            linked.extend(find_worktree_dirs(&repo, FORGOTTEN_DEPTH));
             let Some(list) = git(&repo, &["worktree", "list", "--porcelain"]) else {
                 continue;
             };
@@ -335,28 +338,70 @@ impl Scanner for Worktrees {
                 if !lock(&ctx.seen_worktrees).insert(wt.clone()) {
                     continue;
                 }
-                // Where the worktree lives decides its section: one inside an
-                // agent root is an agent worktree, whatever folder was scanned.
-                let (source, label) = match agent_label(&ctx.home, &wt) {
-                    Some(label) => (SourceId::AgentWorktrees, label),
-                    None => (
-                        SourceId::Worktrees,
-                        match wt.strip_prefix(&ctx.target) {
-                            Ok(rel) => rel.display().to_string(),
-                            Err(_) => tilde(&ctx.home, &wt),
-                        },
-                    ),
-                };
+                let (source, label) = place(ctx, &wt);
                 emit(tx, describe(ctx, source, &wt, Some(&repo), label));
             }
+        }
+        // After every repository answered: a worktree git still lists is
+        // never taken for a forgotten one.
+        linked.sort();
+        for wt in linked {
+            let wt = crate::platform::canonical(&wt).unwrap_or(wt);
+            // Seen first: asking git again about one it listed costs a process.
+            if lock(&ctx.seen_worktrees).contains(&wt) || !forgotten(ctx, &wt) {
+                continue;
+            }
+            lock(&ctx.seen_worktrees).insert(wt.clone());
+            let (source, label) = place(ctx, &wt);
+            emit(tx, describe(ctx, source, &wt, None, label));
         }
         Ok(())
     }
 }
 
-/// Repositories (a `.git` directory) under the target, not descending into them.
-fn find_repos(ctx: &ScanCtx) -> Vec<PathBuf> {
+/// How deep inside a repository a forgotten worktree is looked for:
+/// `.claude/worktrees/<name>` is three folders down.
+const FORGOTTEN_DEPTH: usize = 3;
+
+/// Section and name of a worktree. Where it lives decides its section: one
+/// inside an agent root is an agent worktree, whatever folder was scanned.
+fn place(ctx: &ScanCtx, wt: &Path) -> (SourceId, String) {
+    match agent_label(&ctx.home, wt) {
+        Some(label) => (SourceId::AgentWorktrees, label),
+        None => (
+            SourceId::Worktrees,
+            match wt.strip_prefix(&ctx.target) {
+                Ok(rel) => rel.display().to_string(),
+                Err(_) => tilde(&ctx.home, wt),
+            },
+        ),
+    }
+}
+
+/// Whether `wt` is a worktree git no longer knows: its `.git` file names a
+/// registration (`<repository>/worktrees/<name>`) that is certainly gone.
+/// `git worktree remove` leaves one behind when it drops the registration
+/// but cannot delete the folder. A submodule has a `.git` file too, and is
+/// not one of these.
+fn forgotten(ctx: &ScanCtx, wt: &Path) -> bool {
+    let Ok(dotgit) = std::fs::read_to_string(wt.join(".git")) else {
+        return false;
+    };
+    let registration = dotgit
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(|gitdir| Path::new(gitdir.trim()))
+        .and_then(Path::parent)
+        .and_then(Path::file_name);
+    registration.is_some_and(|dir| dir == "worktrees")
+        && matches!(main_repo(ctx, wt), MainRepo::Gone)
+}
+
+/// Repositories (a `.git` directory) under the target, not descending into
+/// them, and the folders with a `.git` file met on the way.
+fn find_repos(ctx: &ScanCtx) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let repos = Mutex::new(Vec::new());
+    let linked = Mutex::new(Vec::new());
     ignore::WalkBuilder::new(&ctx.target)
         .standard_filters(false)
         .follow_links(false)
@@ -379,16 +424,25 @@ fn find_repos(ctx: &ScanCtx) -> Vec<PathBuf> {
                 {
                     return WalkState::Skip;
                 }
-                if path.join(".git").is_dir() {
-                    lock(&repos).push(path.to_path_buf());
-                    return WalkState::Skip;
+                match std::fs::metadata(path.join(".git")) {
+                    Ok(dotgit) if dotgit.is_dir() => {
+                        lock(&repos).push(path.to_path_buf());
+                        WalkState::Skip
+                    }
+                    Ok(dotgit) if dotgit.is_file() => {
+                        lock(&linked).push(path.to_path_buf());
+                        WalkState::Continue
+                    }
+                    _ => WalkState::Continue,
                 }
-                WalkState::Continue
             })
         });
     let mut repos = repos.into_inner().unwrap_or_else(PoisonError::into_inner);
     repos.sort();
-    repos
+    (
+        repos,
+        linked.into_inner().unwrap_or_else(PoisonError::into_inner),
+    )
 }
 
 /// Worktrees that coding agents keep outside any project folder.
@@ -592,7 +646,8 @@ fn find_worktree_dirs(root: &Path, depth: usize) -> Vec<PathBuf> {
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                // Git's own folder holds no worktree, only their registrations.
+                if !entry.file_type().is_ok_and(|t| t.is_dir()) || entry.file_name() == ".git" {
                     continue;
                 }
                 if path.join(".git").is_file() {
@@ -1194,6 +1249,81 @@ mod tests {
         assert_eq!(items[0].status, vec![Status::Broken]);
         assert_eq!(items[0].removal, Removal::RemoveDir(wt));
         assert!(!items[0].safe);
+    }
+
+    /// What `git worktree remove` leaves when it cannot delete the folder:
+    /// the registration is gone, the folder and its `.git` file stay.
+    fn forget(repo: &Path) {
+        fs::remove_dir_all(repo.join(".git/worktrees")).unwrap();
+    }
+
+    #[test]
+    fn worktree_git_forgot_inside_its_repository_is_broken() {
+        let d = tempfile::tempdir().unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
+        let r = root.join("r");
+        repo(&r);
+        let wt = r.join(".claude/worktrees/w1");
+        git(
+            &r,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "feat"],
+        );
+        forget(&r);
+        let items = run_folder(&ctx(&root, &root, InUse::default()));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].source, SourceId::Worktrees);
+        assert_eq!(items[0].path.as_ref(), Some(&wt));
+        assert_eq!(items[0].status, vec![Status::Broken]);
+        assert_eq!(items[0].removal, Removal::RemoveDir(wt));
+        assert!(!items[0].safe);
+    }
+
+    #[test]
+    fn worktree_git_forgot_next_to_its_repository_is_broken() {
+        let (_d, root, wt) = setup(true);
+        forget(&root.join("r"));
+        let items = run_folder(&ctx(&root, &root, InUse::default()));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].status, vec![Status::Broken]);
+        assert_eq!(items[0].removal, Removal::RemoveDir(wt));
+    }
+
+    #[test]
+    fn worktree_git_still_knows_is_listed_once() {
+        let d = tempfile::tempdir().unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
+        let r = root.join("r");
+        repo(&r);
+        let wt = r.join(".claude/worktrees/w1");
+        git(
+            &r,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "feat"],
+        );
+        let items = run_folder(&ctx(&root, &root, InUse::default()));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert!(matches!(items[0].removal, Removal::Worktree { .. }));
+    }
+
+    /// A `.git` file is not proof of a worktree: a submodule has one too, and
+    /// its folder is never offered as a broken worktree.
+    #[test]
+    fn folder_whose_gitdir_is_not_a_worktree_registration_is_left_out() {
+        let d = tempfile::tempdir().unwrap();
+        let root = crate::platform::canonical(d.path()).unwrap();
+        let r = root.join("r");
+        repo(&r);
+        for (folder, gitdir) in [
+            ("vendor-lib", r.join(".git/modules/vendor-lib")),
+            ("elsewhere", r.join(".git/worktrees")),
+        ] {
+            fs::create_dir_all(r.join(folder)).unwrap();
+            fs::write(
+                r.join(folder).join(".git"),
+                format!("gitdir: {}\n", gitdir.display()),
+            )
+            .unwrap();
+        }
+        assert!(run_folder(&ctx(&root, &root, InUse::default())).is_empty());
     }
 
     #[test]
