@@ -34,6 +34,7 @@ unsafe_code = "forbid"
 # Tests may unwrap (see clippy.toml); production code handles the error.
 unwrap_used = "warn"
 expect_used = "warn"
+map_unwrap_or = "warn"
 
 [profile.release]
 strip = true

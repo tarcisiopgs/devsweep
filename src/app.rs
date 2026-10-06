@@ -593,8 +593,7 @@ impl App {
     pub fn source_total(&self, source: SourceId) -> u64 {
         self.sources
             .get(&source)
-            .map(|v| v.items.iter().filter_map(|i| i.size).sum())
-            .unwrap_or(0)
+            .map_or(0, |v| v.items.iter().filter_map(|i| i.size).sum())
     }
 
     pub fn selected_total(&self) -> (usize, u64) {

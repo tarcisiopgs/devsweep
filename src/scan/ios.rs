@@ -92,8 +92,7 @@ pub fn devices_from_json(json: &str, ctx: &ScanCtx) -> anyhow::Result<Vec<Item>>
                 path: dev.data_path.as_ref().map(|p| {
                     PathBuf::from(p)
                         .parent()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from(p))
+                        .map_or_else(|| PathBuf::from(p), PathBuf::from)
                 }),
                 size: dev.data_path_size,
                 status,
