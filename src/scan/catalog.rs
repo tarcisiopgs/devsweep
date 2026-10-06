@@ -158,38 +158,29 @@ fn token_dir(token: &str, ctx: &ScanCtx, runner: &Runner, env: &EnvFn) -> Option
     }
 }
 
-/// Expand `~`, a leading token and a `*` in one component.
+/// Expand `~`, a leading token and a `*` in one component. The folder the
+/// pattern starts from stays a path all along: its name may not be UTF-8.
 fn expand(pattern: &str, ctx: &ScanCtx, runner: &Runner, env: &EnvFn) -> Vec<PathBuf> {
-    let mut p = pattern.to_string();
-    if let Some(rest) = p.strip_prefix("~/") {
-        p = ctx.home.join(rest).display().to_string();
-    }
     let token = TOKENS
         .iter()
         .find_map(|t| pattern.strip_prefix(t).map(|rest| (*t, rest)));
-    if let Some((token, rest)) = token {
+    let (root, rest) = if let Some(rest) = pattern.strip_prefix("~/") {
+        (ctx.home.clone(), rest)
+    } else if let Some((token, rest)) = token {
         let Some(dir) = token_dir(token, ctx, runner, env) else {
             return vec![];
         };
-        p = dir.join(rest.trim_start_matches('/')).display().to_string();
-    }
-    let path = PathBuf::from(&p);
-    if !p.contains('*') {
-        return vec![path];
-    }
-    // Only one `*` is supported, in any single component.
-    let comps: Vec<_> = path.components().collect();
-    let Some(star) = comps
-        .iter()
-        .position(|c| c.as_os_str().to_string_lossy().contains('*'))
-    else {
-        return vec![];
+        (dir, rest.trim_start_matches('/'))
+    } else {
+        (PathBuf::new(), pattern)
     };
-    let base: PathBuf = comps[..star].iter().collect();
-    let pat = comps[star].as_os_str().to_string_lossy().to_string();
-    let rest: PathBuf = comps[star + 1..].iter().collect();
-    let (prefix, suffix) = pat.split_once('*').unwrap_or((&pat, ""));
-    let Ok(entries) = std::fs::read_dir(&base) else {
+    // Only one `*` is supported, in any single component.
+    let Some((before, after)) = rest.split_once('*') else {
+        return vec![root.join(rest)];
+    };
+    let (parent, prefix) = before.rsplit_once('/').unwrap_or(("", before));
+    let (suffix, tail) = after.split_once('/').unwrap_or((after, ""));
+    let Ok(entries) = std::fs::read_dir(root.join(parent)) else {
         return vec![];
     };
     let mut out: Vec<PathBuf> = entries
@@ -198,7 +189,7 @@ fn expand(pattern: &str, ctx: &ScanCtx, runner: &Runner, env: &EnvFn) -> Vec<Pat
             let name = e.file_name().to_string_lossy().to_string();
             name.starts_with(prefix) && name.ends_with(suffix)
         })
-        .map(|e| e.path().join(&rest))
+        .map(|e| e.path().join(tail))
         .collect();
     out.sort();
     out
@@ -593,6 +584,32 @@ mod tests {
         assert_eq!(
             found_on(Os::MacOs, &[], home, rule(PER_PLATFORM)),
             [home.join("Library/Caches/m"), home.join("a")]
+        );
+    }
+
+    /// A folder whose name is not UTF-8 is still a folder: the caches below
+    /// it are found where they are, not under a name rewritten on the way.
+    // macOS refuses such a name, and a Windows path is not made of bytes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn caches_are_found_under_a_home_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join(std::ffi::OsStr::from_bytes(b"h\xffme"));
+        for dir in ["a", ".cache/b", "s/one/c"] {
+            fill(&home.join(dir));
+        }
+        assert_eq!(
+            found_on(Os::Linux, &[], &home, rule(PER_PLATFORM)),
+            [home.join(".cache/b"), home.join("a")]
+        );
+        let starred = rule(
+            "[[rule]]\nid='p'\ngroup='G'\nlabel='l'\npaths=['~/s/*/c']\n\
+             safe=false\nmode='clear'\nsource='s'\n",
+        );
+        assert_eq!(
+            found_on(Os::Linux, &[], &home, starred),
+            [home.join("s/one/c")]
         );
     }
 

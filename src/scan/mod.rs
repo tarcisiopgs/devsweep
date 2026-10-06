@@ -173,6 +173,15 @@ pub fn which(bin: &str) -> Option<PathBuf> {
 /// Longest a scan-time tool call (docker, simctl, brew…) may take.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Configuration every git started here runs with, above the repository's
+/// own. `core.fsmonitor` names a program git runs on each `status`: a
+/// repository found by the scan must not get to choose one.
+const GIT_ENV: [(&str, &str); 3] = [
+    ("GIT_CONFIG_COUNT", "1"),
+    ("GIT_CONFIG_KEY_0", "core.fsmonitor"),
+    ("GIT_CONFIG_VALUE_0", "false"),
+];
+
 /// Run `argv` in `cwd`, feeding `stdin`, and kill it after `timeout`.
 /// stdin, stdout and stderr each get their own thread, so a chatty command
 /// or a large input can never stall both sides of a pipe.
@@ -195,6 +204,7 @@ pub fn exec(
     };
     let mut cmd = Command::new(program);
     cmd.args(args)
+        .envs(GIT_ENV)
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
@@ -508,6 +518,42 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
         }
         assert_eq!(lock(), None);
+    }
+
+    /// A repository can name a program for git to run on every `status`
+    /// (`core.fsmonitor`). Scanning a folder must never run what a
+    /// repository found in it asks for.
+    // The program is a shell script.
+    #[cfg(unix)]
+    #[test]
+    fn git_does_not_run_the_fsmonitor_a_repository_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        let (marker, hook) = (d.path().join("ran"), d.path().join("hook.sh"));
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("a"), "a").unwrap();
+        git(&["add", "a"]);
+        git(&["config", "core.fsmonitor", hook.to_str().unwrap()]);
+        run_timeout(
+            &["git", "-C", repo.to_str().unwrap(), "status", "--porcelain"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(!marker.exists());
     }
 
     #[test]
