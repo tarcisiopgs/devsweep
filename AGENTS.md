@@ -116,7 +116,7 @@ Rules live in `catalog/*.toml`, one file per ecosystem. The schema and the meani
 
 Each platform package needs its own trusted publisher on npmjs.com (repository `tarcisiopgs/devsweep`, workflow `release.yml`), configured once after the package exists. A new package name is therefore published once by hand (a `0.0.0` placeholder) before the first release that ships it; `npm trust github <package> --repo tarcisiopgs/devsweep --file release.yml` then configures the publisher. The Windows packages are scoped because npm's spam detection rejects the unscoped `devsweep-win32-*` names.
 
-No npm token exists. npm trusts the workflow by its file name, so do not rename `release.yml`.
+No npm token exists. npm trusts the workflow by its file name, so do not rename `release.yml`, nor its `name`: the `Winget` workflow starts when the workflow called `Release` finishes.
 
 ### Package managers
 
@@ -126,6 +126,8 @@ The release also attaches a `.deb` per Linux architecture (`scripts/build-deb.sh
 |---|---|
 | Homebrew (macOS, Linux): `tarcisiopgs/homebrew-tap` | by itself: its `Update formula` workflow rewrites, installs and tests the formula a few times a day |
 | Scoop (Windows): `tarcisiopgs/scoop-bucket` | by itself: its `Excavator` workflow reads `checkver` and `autoupdate` from the manifest |
-| winget (`tarcisiopgs.devsweep`) | by hand, from `packaging/winget` |
+| winget (`tarcisiopgs.devsweep`) | by itself: the `Winget` workflow opens the pull request to `microsoft/winget-pkgs` once `Release` has attached the binaries |
 
-Both repositories update on their own token, so no secret is stored for them. After a release has its binaries, run `scripts/update-packaging.sh vX.Y.Z` and open a pull request with the result; the `Packaging` workflow installs the `.deb` and the winget manifest on a real system. Then publish `packaging/winget` as a pull request to `microsoft/winget-pkgs` (`manifests/t/tarcisiopgs/devsweep/X.Y.Z/`).
+The tap and the bucket update on their own token, so no secret is stored for them. winget is the exception: a workflow's token cannot open a pull request in Microsoft's repository, so `winget.yml` uses the `WINGET_TOKEN` secret, a classic personal access token with the `public_repo` scope, and the fork `tarcisiopgs/winget-pkgs`. Without the secret, or while the package is not in `winget-pkgs` yet, the workflow says so and sends nothing; `gh workflow run winget.yml -f tag=vX.Y.Z` sends a release again. A moderator of `winget-pkgs` still approves each pull request.
+
+`packaging/winget` is the manifest tested on a real system, not the one that is published. After a release has its binaries, run `scripts/update-packaging.sh vX.Y.Z` and open a pull request with the result; the `Packaging` workflow installs the `.deb` and the winget manifest.
