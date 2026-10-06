@@ -27,7 +27,7 @@ cat > "$pkg/DEBIAN/control" <<EOF
 Package: devsweep
 Version: $version
 Architecture: $arch
-Maintainer: Tarcísio Pedro <tarcisiopgs@gmail.com>
+Maintainer: Tarcísio Pedro <contato@tarcisiopgs.com>
 Installed-Size: $size
 Section: utils
 Priority: optional
