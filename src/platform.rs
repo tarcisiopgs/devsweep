@@ -153,6 +153,13 @@ impl Os {
                 // only the mount table can tell.
                 const REMOVABLE: [&str; 3] = ["/mnt", "/media", "/run/media"];
                 let removable = |p: &Path| REMOVABLE.iter().any(|root| p.starts_with(root));
+                // Each user's runtime folder holds what the session mounts
+                // on demand (network shares under `gvfs`, the document
+                // portal), behind one mount that stays whatever comes and
+                // goes inside it.
+                if path.starts_with("/run/user") {
+                    return false;
+                }
                 !removable(path) || mounts.iter().any(|m| removable(m) && path.starts_with(m))
             }
             Os::Windows => windows_volume_root(path).is_some_and(|root| exists(&root)),
@@ -531,6 +538,26 @@ mod tests {
         let exists = |_: &Path| true;
         assert!(!Os::Linux.volume_mounted(Path::new("/mnt/disk/r"), &[], &exists));
         assert!(Os::Linux.volume_mounted(Path::new("/home/u/r"), &[], &exists));
+    }
+
+    /// A network share opened in the file manager lives under
+    /// `/run/user/<uid>/gvfs`, one mount for all of them: the mount table
+    /// cannot tell a share that was closed from one that never held the
+    /// repository.
+    #[test]
+    fn linux_path_in_the_runtime_folder_is_never_known_to_be_mounted() {
+        let exists = |_: &Path| true;
+        let table = mounts(&["/", "/run/user/1000", "/run/user/1000/gvfs"]);
+        for path in [
+            "/run/user/1000/gvfs/smb-share:server=nas,share=code/r/.git",
+            "/run/user/1000/doc/1a2b/r/.git",
+        ] {
+            assert!(
+                !Os::Linux.volume_mounted(Path::new(path), &table, &exists),
+                "{path}"
+            );
+        }
+        assert!(Os::Linux.volume_mounted(Path::new("/run/r"), &table, &exists));
     }
 
     #[test]

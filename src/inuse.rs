@@ -192,12 +192,18 @@ impl InUse {
             Some(home) => cwd == home,
             None => false,
         };
+        // A process shows its folder by its real path; `path` may reach the
+        // same folder through a symlink, so both spellings count.
+        let resolved = crate::platform::canonical(path)
+            .ok()
+            .filter(|real| real != path);
         let within = |cwd: &Path| {
-            if self.windows {
-                windows_within(cwd, path)
-            } else {
-                cwd.starts_with(path)
-            }
+            std::iter::once(path)
+                .chain(resolved.as_deref())
+                .any(|scope| match self.windows {
+                    true => windows_within(cwd, scope),
+                    false => cwd.starts_with(scope),
+                })
         };
         self.procs
             .iter()
@@ -411,6 +417,27 @@ mod tests {
                 .as_deref(),
             Some("claude · PID 4821")
         );
+    }
+
+    /// A process shows the folder it works in by its real path. An item
+    /// reached through a symlink (`~/.cache` moved to another disk and
+    /// linked back) is the same folder under another spelling.
+    // Symlinks need no privilege on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn lock_for_an_item_reached_through_a_symlink() {
+        let d = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(d.path()).unwrap();
+        let real = home.join("data/cache");
+        std::fs::create_dir_all(real.join("pip/http")).unwrap();
+        std::os::unix::fs::symlink(&real, home.join(".cache")).unwrap();
+        let cwd = real.join("pip/http");
+        let iu = InUse::parse(&format!("p7\ncpip\nn{}\n", cwd.display()));
+        assert_eq!(
+            iu.lock_for(&home.join(".cache/pip")).as_deref(),
+            Some("pip · PID 7")
+        );
+        assert_eq!(iu.lock_for(&home.join(".cache/pip/other")), None);
     }
 
     #[test]
