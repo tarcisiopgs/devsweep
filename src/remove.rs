@@ -29,9 +29,13 @@ impl Executor for RealExecutor {
         for entry in std::fs::read_dir(p).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let result = if is_dir {
+            let kind = entry.file_type().ok();
+            let result = if kind.is_some_and(|t| t.is_dir()) {
                 std::fs::remove_dir_all(&path)
+            } else if kind.is_some_and(|t| t.is_symlink()) {
+                // The link itself, never what it points at. Windows removes
+                // a link to a folder (a junction) only as a folder.
+                std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
             } else {
                 std::fs::remove_file(&path)
             };

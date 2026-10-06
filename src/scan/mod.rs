@@ -239,8 +239,7 @@ pub fn exec(
             break status;
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             anyhow::bail!("{bin} timed out");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -253,6 +252,24 @@ pub fn exec(
         stdout: stdout.join().unwrap_or_default(),
         stderr: stderr.join().unwrap_or_default(),
     })
+}
+
+/// Stop `child` and, on Windows, whatever it started: a `.cmd` tool runs
+/// below `cmd.exe`, and killing only that would leave the tool running.
+fn kill_tree(child: &mut std::process::Child) {
+    use std::process::Stdio;
+    if Os::current() == Os::Windows
+        && let Some(taskkill) = which("taskkill")
+    {
+        let _ = Command::new(taskkill)
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Like [`run`], in `cwd`, killing the command after `timeout`. Protects the
