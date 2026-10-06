@@ -61,16 +61,16 @@ EOF
 winget=$root/packaging/winget
 mkdir -p "$winget"
 cat > "$winget/tarcisiopgs.devsweep.yaml" <<EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
 
 PackageIdentifier: tarcisiopgs.devsweep
 PackageVersion: $version
 DefaultLocale: en-US
 ManifestType: version
-ManifestVersion: 1.10.0
+ManifestVersion: 1.12.0
 EOF
 cat > "$winget/tarcisiopgs.devsweep.installer.yaml" <<EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 
 PackageIdentifier: tarcisiopgs.devsweep
 PackageVersion: $version
@@ -93,10 +93,10 @@ Installers:
   - RelativeFilePath: devsweep-aarch64-pc-windows-msvc\\devsweep.exe
     PortableCommandAlias: devsweep
 ManifestType: installer
-ManifestVersion: 1.10.0
+ManifestVersion: 1.12.0
 EOF
 cat > "$winget/tarcisiopgs.devsweep.locale.en-US.yaml" <<EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 
 PackageIdentifier: tarcisiopgs.devsweep
 PackageVersion: $version
@@ -119,6 +119,6 @@ Tags:
 - tui
 ReleaseNotesUrl: $url/releases/tag/$tag
 ManifestType: defaultLocale
-ManifestVersion: 1.10.0
+ManifestVersion: 1.12.0
 EOF
 echo "packaging/ now points at $tag"
