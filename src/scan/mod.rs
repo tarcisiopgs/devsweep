@@ -239,8 +239,7 @@ pub fn exec(
             break status;
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             anyhow::bail!("{bin} timed out");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -253,6 +252,24 @@ pub fn exec(
         stdout: stdout.join().unwrap_or_default(),
         stderr: stderr.join().unwrap_or_default(),
     })
+}
+
+/// Stop `child` and, on Windows, whatever it started: a `.cmd` tool runs
+/// below `cmd.exe`, and killing only that would leave the tool running.
+fn kill_tree(child: &mut std::process::Child) {
+    use std::process::Stdio;
+    if Os::current() == Os::Windows
+        && let Some(taskkill) = which("taskkill")
+    {
+        let _ = Command::new(taskkill)
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Like [`run`], in `cwd`, killing the command after `timeout`. Protects the
@@ -461,6 +478,36 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.to_string(), "sh failed: fatal: boom");
+    }
+
+    /// npm, pnpm and yarn are `.cmd` files on Windows: the process devsweep
+    /// starts is `cmd.exe`, and the tool runs below it. Past the timeout the
+    /// whole tree stops, or the tool would go on deleting after the removal
+    /// was reported as failed.
+    #[cfg(windows)]
+    #[test]
+    fn timeout_stops_what_the_command_started() {
+        use std::time::{Duration, Instant};
+        let d = tempfile::tempdir().unwrap();
+        let dir = crate::platform::canonical(d.path()).unwrap();
+        let err = run_timeout(
+            &["cmd", "/C", "ping", "-n", "60", "127.0.0.1"],
+            Some(&dir),
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "cmd timed out");
+        // `ping` works in `dir`: while it lives, the folder is locked.
+        let lock = || {
+            crate::inuse::windows::collect()
+                .for_os(Os::Windows)
+                .lock_for(&dir)
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while lock().is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert_eq!(lock(), None);
     }
 
     #[test]
