@@ -1,0 +1,18 @@
+pkgbase = devsweep-bin
+	pkgdesc = Find and remove what a developer's machine accumulates: build artifacts, agent worktrees, emulators, Docker leftovers and dev caches
+	pkgver = 0.4.1
+	pkgrel = 1
+	url = https://github.com/tarcisiopgs/devsweep
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	provides = devsweep
+	conflicts = devsweep
+	options = !strip
+	options = !debug
+	source_x86_64 = devsweep-0.4.1-x86_64.tar.xz::https://github.com/tarcisiopgs/devsweep/releases/download/v0.4.1/devsweep-x86_64-unknown-linux-musl.tar.xz
+	sha256sums_x86_64 = 7a08e200ef8ac15dcc3b35cddfa41731d98b2a361cf9ae4bf9cbe3a09e588a19
+	source_aarch64 = devsweep-0.4.1-aarch64.tar.xz::https://github.com/tarcisiopgs/devsweep/releases/download/v0.4.1/devsweep-aarch64-unknown-linux-musl.tar.xz
+	sha256sums_aarch64 = 6621df136e8f526c2f53554b1029f4f10eb8fdf0e2d39a620cf8f88a6f5b9442
+
+pkgname = devsweep-bin

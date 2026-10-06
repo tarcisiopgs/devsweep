@@ -1,0 +1,72 @@
+name: Packaging
+
+# Installs devsweep the way a user of each package manager would, from the
+# manifests kept in packaging/: the .deb with apt, the AUR package with
+# pacman, the winget manifest with winget. They point at a published
+# release, so this runs when they change, not on every pull request.
+on:
+  pull_request:
+    paths:
+      - packaging/**
+      - scripts/build-deb.sh
+      - scripts/update-packaging.sh
+      - .github/workflows/packaging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: .deb with apt
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, install, run and remove the package
+        run: |
+          version=$(sed -n 's/^pkgver=//p' packaging/aur/PKGBUILD)
+          target=x86_64-unknown-linux-musl
+          gh release download "v$version" --pattern "devsweep-$target.tar.xz"
+          tar -xJf "devsweep-$target.tar.xz"
+          scripts/build-deb.sh "devsweep-$target/devsweep" "$version" amd64 out
+          sudo apt-get install -y "./out/devsweep_${version}_amd64.deb"
+          devsweep --version
+          sudo apt-get remove -y devsweep
+          test ! -e /usr/bin/devsweep
+
+  aur:
+    name: AUR package with pacman
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, check, install and run the package
+        run: |
+          pacman -Sy --noconfirm --needed base-devel
+          # makepkg refuses to run as root.
+          useradd -m builder
+          cp -r packaging/aur /home/builder/aur
+          chown -R builder /home/builder/aur
+          cd /home/builder/aur
+          su builder -c 'makepkg --noconfirm'
+          su builder -c 'makepkg --printsrcinfo' | diff - .SRCINFO
+          pacman -U --noconfirm devsweep-bin-*.pkg.tar.*
+          devsweep --version
+
+  winget:
+    name: winget manifest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate, install and run the manifest
+        shell: pwsh
+        run: |
+          winget validate --manifest packaging\winget
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          winget settings --enable LocalManifestFiles
+          winget install --manifest packaging\winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # A portable package is linked here, a folder new shells have on PATH.
+          & "$env:LOCALAPPDATA\Microsoft\WinGet\Links\devsweep.exe" --version

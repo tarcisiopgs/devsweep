@@ -43,6 +43,7 @@ src/app.rs           App: a pure reducer over ScanEvent, RemoveEvent and key eve
 src/ui/              rendering only: list.rs (main screen), review.rs (review, progress, done)
 tests/fixtures/      captured real outputs of simctl, docker, lsof, git, brew
 npm/                 npm shim package and the platform package template
+packaging/           manifests for the AUR and winget, pointed at a published release
 ```
 
 ## Architecture rules
@@ -116,3 +117,15 @@ Rules live in `catalog/*.toml`, one file per ecosystem. The schema and the meani
 Each platform package needs its own trusted publisher on npmjs.com (repository `tarcisiopgs/devsweep`, workflow `release.yml`), configured once after the package exists. A new package name is therefore published once by hand (a `0.0.0` placeholder) before the first release that ships it; `npm trust github <package> --repo tarcisiopgs/devsweep --file release.yml` then configures the publisher. The Windows packages are scoped because npm's spam detection rejects the unscoped `devsweep-win32-*` names.
 
 No npm token exists. npm trusts the workflow by its file name, so do not rename `release.yml`.
+
+### Package managers
+
+The release also attaches a `.deb` per Linux architecture (`scripts/build-deb.sh`), installed with `sudo apt install ./devsweep_*.deb`. The other package managers read the same release:
+
+| Where | How it follows a release |
+|---|---|
+| Homebrew (macOS, Linux): `tarcisiopgs/homebrew-tap` | by itself: its `Update formula` workflow rewrites, installs and tests the formula a few times a day |
+| Scoop (Windows): `tarcisiopgs/scoop-bucket` | by itself: its `Excavator` workflow reads `checkver` and `autoupdate` from the manifest |
+| AUR (`devsweep-bin`) and winget (`tarcisiopgs.devsweep`) | by hand, from `packaging/` |
+
+Both repositories update on their own token, so no secret is stored for them. After a release has its binaries, run `scripts/update-packaging.sh vX.Y.Z` and open a pull request with the result; the `Packaging` workflow installs the `.deb`, the AUR package and the winget manifest on a real system. Then publish `packaging/aur` to the AUR repository of `devsweep-bin` and `packaging/winget` as a pull request to `microsoft/winget-pkgs` (`manifests/t/tarcisiopgs/devsweep/X.Y.Z/`).

@@ -71,6 +71,18 @@ jobs:
           fi
           printf "%s  %s\n" "$sum" "$archive" > "$archive.sha256"
           gh release upload "$TAG" "$archive" "$archive.sha256" --clobber
+      - name: Attach the .deb to the release
+        if: contains(matrix.target, 'linux')
+        run: |
+          case "$TARGET" in
+            x86_64-*) arch=amd64 ;;
+            aarch64-*) arch=arm64 ;;
+          esac
+          version="${TAG#v}"
+          scripts/build-deb.sh "target/$TARGET/release/devsweep" "$version" "$arch" deb
+          deb="devsweep_${version}_$arch.deb"
+          (cd deb && sha256sum "$deb" > "$deb.sha256")
+          gh release upload "$TAG" "deb/$deb" "deb/$deb.sha256" --clobber
 
   npm:
     name: Publish to npm
