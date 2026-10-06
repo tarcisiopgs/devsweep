@@ -1,11 +1,11 @@
 #!/bin/sh
-# Point the package manifests kept in this repository at a release:
+# Point the winget manifest kept in this repository at a release:
 #
 #   scripts/update-packaging.sh v0.4.1
 #
-# It rewrites packaging/aur (PKGBUILD and .SRCINFO) and packaging/winget
-# from the checksums the release publishes. Run it once the release has
-# its binaries; publishing the result is described in AGENTS.md.
+# It rewrites packaging/winget from the checksums the release publishes.
+# Run it once the release has its binaries; publishing the result is
+# described in AGENTS.md.
 set -eu
 
 tag=$1
@@ -18,45 +18,10 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 sum() {
     curl -fsSL "$base/$1.sha256" | cut -d " " -f 1
 }
-linux_x64=$(sum devsweep-x86_64-unknown-linux-musl.tar.xz)
-linux_arm=$(sum devsweep-aarch64-unknown-linux-musl.tar.xz)
 # winget writes hashes in upper case.
 win_x64=$(sum devsweep-x86_64-pc-windows-msvc.zip | tr a-f A-F)
 win_arm=$(sum devsweep-aarch64-pc-windows-msvc.zip | tr a-f A-F)
 released=$(gh release view "$tag" --repo "$repo" --json publishedAt --jq '.publishedAt[0:10]')
-
-aur=$root/packaging/aur
-sed -i.bak \
-    -e "s/^pkgver=.*/pkgver=$version/" \
-    -e "s/^pkgrel=.*/pkgrel=1/" \
-    -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$linux_x64')/" \
-    -e "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$linux_arm')/" \
-    "$aur/PKGBUILD"
-rm "$aur/PKGBUILD.bak"
-desc=$(sed -n 's/^pkgdesc="\(.*\)"$/\1/p' "$aur/PKGBUILD")
-
-# What `makepkg --printsrcinfo` prints for the PKGBUILD; the Packaging
-# workflow checks the two agree.
-cat > "$aur/.SRCINFO" <<EOF
-pkgbase = devsweep-bin
-	pkgdesc = $desc
-	pkgver = $version
-	pkgrel = 1
-	url = $url
-	arch = x86_64
-	arch = aarch64
-	license = MIT
-	provides = devsweep
-	conflicts = devsweep
-	options = !strip
-	options = !debug
-	source_x86_64 = devsweep-$version-x86_64.tar.xz::$base/devsweep-x86_64-unknown-linux-musl.tar.xz
-	sha256sums_x86_64 = $linux_x64
-	source_aarch64 = devsweep-$version-aarch64.tar.xz::$base/devsweep-aarch64-unknown-linux-musl.tar.xz
-	sha256sums_aarch64 = $linux_arm
-
-pkgname = devsweep-bin
-EOF
 
 winget=$root/packaging/winget
 mkdir -p "$winget"

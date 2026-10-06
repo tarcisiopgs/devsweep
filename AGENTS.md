@@ -43,7 +43,7 @@ src/app.rs           App: a pure reducer over ScanEvent, RemoveEvent and key eve
 src/ui/              rendering only: list.rs (main screen), review.rs (review, progress, done)
 tests/fixtures/      captured real outputs of simctl, docker, lsof, git, brew
 npm/                 npm shim package and the platform package template
-packaging/           manifests for the AUR and winget, pointed at a published release
+packaging/           the winget manifest, pointed at a published release
 ```
 
 ## Architecture rules
@@ -126,6 +126,6 @@ The release also attaches a `.deb` per Linux architecture (`scripts/build-deb.sh
 |---|---|
 | Homebrew (macOS, Linux): `tarcisiopgs/homebrew-tap` | by itself: its `Update formula` workflow rewrites, installs and tests the formula a few times a day |
 | Scoop (Windows): `tarcisiopgs/scoop-bucket` | by itself: its `Excavator` workflow reads `checkver` and `autoupdate` from the manifest |
-| AUR (`devsweep-bin`) and winget (`tarcisiopgs.devsweep`) | by hand, from `packaging/` |
+| winget (`tarcisiopgs.devsweep`) | by hand, from `packaging/winget` |
 
-Both repositories update on their own token, so no secret is stored for them. After a release has its binaries, run `scripts/update-packaging.sh vX.Y.Z` and open a pull request with the result; the `Packaging` workflow installs the `.deb`, the AUR package and the winget manifest on a real system. Then publish `packaging/aur` to the AUR repository of `devsweep-bin` and `packaging/winget` as a pull request to `microsoft/winget-pkgs` (`manifests/t/tarcisiopgs/devsweep/X.Y.Z/`).
+Both repositories update on their own token, so no secret is stored for them. After a release has its binaries, run `scripts/update-packaging.sh vX.Y.Z` and open a pull request with the result; the `Packaging` workflow installs the `.deb` and the winget manifest on a real system. Then publish `packaging/winget` as a pull request to `microsoft/winget-pkgs` (`manifests/t/tarcisiopgs/devsweep/X.Y.Z/`).

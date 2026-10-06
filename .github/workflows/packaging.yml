@@ -1,9 +1,9 @@
 name: Packaging
 
-# Installs devsweep the way a user of each package manager would, from the
-# manifests kept in packaging/: the .deb with apt, the AUR package with
-# pacman, the winget manifest with winget. They point at a published
-# release, so this runs when they change, not on every pull request.
+# Installs devsweep the way a user of each package manager would: the .deb
+# with apt, and the winget manifest kept in packaging/ with winget. They
+# are built around a published release, so this runs when they change, not
+# on every pull request.
 on:
   pull_request:
     paths:
@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build, install, run and remove the package
         run: |
-          version=$(sed -n 's/^pkgver=//p' packaging/aur/PKGBUILD)
+          version=$(sed -n 's/^PackageVersion: //p' packaging/winget/tarcisiopgs.devsweep.yaml)
           target=x86_64-unknown-linux-musl
           gh release download "v$version" --pattern "devsweep-$target.tar.xz"
           tar -xJf "devsweep-$target.tar.xz"
@@ -35,25 +35,6 @@ jobs:
           devsweep --version
           sudo apt-get remove -y devsweep
           test ! -e /usr/bin/devsweep
-
-  aur:
-    name: AUR package with pacman
-    runs-on: ubuntu-latest
-    container: archlinux:latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build, check, install and run the package
-        run: |
-          pacman -Sy --noconfirm --needed base-devel
-          # makepkg refuses to run as root.
-          useradd -m builder
-          cp -r packaging/aur /home/builder/aur
-          chown -R builder /home/builder/aur
-          cd /home/builder/aur
-          su builder -c 'makepkg --noconfirm'
-          su builder -c 'makepkg --printsrcinfo' | diff - .SRCINFO
-          pacman -U --noconfirm devsweep-bin-*.pkg.tar.*
-          devsweep --version
 
   winget:
     name: winget manifest
