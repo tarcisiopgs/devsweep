@@ -159,6 +159,24 @@ impl Os {
         }
     }
 
+    /// Whether `text` is a path another system wrote: a Windows drive or
+    /// share read on Unix, a rooted path without a drive read on Windows
+    /// (WSL, a container). It names a place this system cannot look at.
+    pub fn foreign_path(self, text: &str) -> bool {
+        let share = text.starts_with("//") || text.starts_with("\\\\");
+        match self {
+            Os::MacOs | Os::Linux => {
+                let mut chars = text.chars();
+                let drive = matches!(
+                    (chars.next(), chars.next(), chars.next()),
+                    (Some(letter), Some(':'), Some('/' | '\\')) if letter.is_ascii_alphabetic()
+                );
+                drive || share
+            }
+            Os::Windows => !share && text.starts_with(['/', '\\']),
+        }
+    }
+
     /// Where Android Studio installs the SDK when no variable says otherwise.
     pub fn android_sdk_default(self, home: &Path, env: Env) -> Option<PathBuf> {
         match self {
@@ -594,6 +612,35 @@ mod tests {
             Os::Windows.android_sdk_default(Path::new("/u"), &env),
             Some(PathBuf::from("/u/AppData/Local/Android/Sdk"))
         );
+    }
+
+    #[test]
+    fn a_path_from_another_system_is_foreign() {
+        for unix in [Os::MacOs, Os::Linux] {
+            for foreign in [
+                "C:/Users/u/r",
+                "d:\\r",
+                "//wsl.localhost/Ubuntu/r",
+                "\\\\nas\\r",
+            ] {
+                assert!(unix.foreign_path(foreign), "{unix:?} {foreign}");
+            }
+            for own in ["/home/u/r", "../r/.git", "r", "C:", "c-drive/r"] {
+                assert!(!unix.foreign_path(own), "{unix:?} {own}");
+            }
+        }
+        for foreign in ["/mnt/c/Users/u/r", "/workspaces/r", "\\r"] {
+            assert!(Os::Windows.foreign_path(foreign), "{foreign}");
+        }
+        for own in [
+            "C:/Users/u/r",
+            "C:\\r",
+            "//nas/code/r",
+            "\\\\nas\\code\\r",
+            "../r/.git",
+        ] {
+            assert!(!Os::Windows.foreign_path(own), "{own}");
+        }
     }
 
     #[test]
