@@ -26,9 +26,25 @@ devsweep ~/code
 ```
 
 Node.js and npm are needed for the npm launcher. devsweep itself runs as a
-native binary. You can also download the binary for your system from
-[GitHub Releases](https://github.com/tarcisiopgs/devsweep/releases/latest),
-or build from source with `cargo build --release`.
+native binary, and a package manager installs it without Node.js:
+
+```sh
+# macOS and Linux, with Homebrew
+brew install tarcisiopgs/tap/devsweep
+
+# Windows, with Scoop
+scoop bucket add tarcisiopgs https://github.com/tarcisiopgs/scoop-bucket
+scoop install devsweep
+```
+
+On Debian and Ubuntu, download the `.deb` for your architecture (`amd64` or
+`arm64`) from
+[GitHub Releases](https://github.com/tarcisiopgs/devsweep/releases/latest)
+and install it with `sudo apt install ./devsweep_*.deb`. A new version is
+installed the same way: no repository is added to apt.
+
+You can also download the bare binary for your system from the same page, or
+build from source with `cargo build --release`.
 
 | System | Architectures | Sources |
 |---|---|---|

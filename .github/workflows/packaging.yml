@@ -1,0 +1,57 @@
+name: Packaging
+
+# Installs devsweep the way a user of each package manager would: the .deb
+# with apt, and the winget manifest kept in packaging/ with winget. They
+# are built around a published release, so this runs when they change, not
+# on every pull request.
+on:
+  pull_request:
+    paths:
+      - packaging/**
+      - scripts/build-deb.sh
+      - scripts/update-packaging.sh
+      - .github/workflows/packaging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: .deb with apt
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, install, run and remove the package
+        run: |
+          version=$(sed -n 's/^PackageVersion: //p' packaging/winget/tarcisiopgs.devsweep.yaml)
+          target=x86_64-unknown-linux-musl
+          gh release download "v$version" --pattern "devsweep-$target.tar.xz"
+          tar -xJf "devsweep-$target.tar.xz"
+          scripts/build-deb.sh "devsweep-$target/devsweep" "$version" amd64 out
+          sudo apt-get install -y "./out/devsweep_${version}_amd64.deb"
+          devsweep --version
+          sudo apt-get remove -y devsweep
+          test ! -e /usr/bin/devsweep
+
+  winget:
+    name: winget manifest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate, install and run the manifest
+        shell: pwsh
+        run: |
+          # The runner's winget may be older than the schema the manifest is
+          # written in: it then validates with a warning about the header,
+          # which is not a failure.
+          $report = winget validate --manifest packaging\winget | Out-String
+          Write-Host $report
+          if ($report -notmatch "Manifest validation succeeded") { exit 1 }
+          winget settings --enable LocalManifestFiles
+          winget install --manifest packaging\winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # A portable package is linked here, a folder new shells have on PATH.
+          & "$env:LOCALAPPDATA\Microsoft\WinGet\Links\devsweep.exe" --version
