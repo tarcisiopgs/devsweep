@@ -63,8 +63,12 @@ jobs:
       - name: Validate, install and run the manifest
         shell: pwsh
         run: |
-          winget validate --manifest packaging\winget
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # The runner's winget may be older than the schema the manifest is
+          # written in: it then validates with a warning about the header,
+          # which is not a failure.
+          $report = winget validate --manifest packaging\winget | Out-String
+          Write-Host $report
+          if ($report -notmatch "Manifest validation succeeded") { exit 1 }
           winget settings --enable LocalManifestFiles
           winget install --manifest packaging\winget --accept-package-agreements --accept-source-agreements --disable-interactivity
           if ($LASTEXITCODE -ne 0) { exit 1 }
