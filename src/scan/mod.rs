@@ -182,7 +182,7 @@ pub fn exec(
     stdin: Option<Vec<u8>>,
     timeout: Duration,
 ) -> anyhow::Result<std::process::Output> {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::process::Stdio;
     let (bin, args) = argv
         .split_first()
@@ -212,27 +212,8 @@ pub fn exec(
         })),
         _ => None,
     };
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let stdout = drain(
-        child
-            .stdout
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
-    let stderr = drain(
-        child
-            .stderr
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
+    let stdout = Drain::start(child.stdout.take());
+    let stderr = Drain::start(child.stderr.take());
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -247,11 +228,51 @@ pub fn exec(
     if let Some(writer) = writer {
         let _ = writer.join();
     }
+    // The command is done; a process it left behind may keep the pipes open.
+    let closed_by = std::time::Instant::now() + PIPE_GRACE;
     Ok(std::process::Output {
         status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
+        stdout: stdout.take(closed_by),
+        stderr: stderr.take(closed_by),
     })
+}
+
+/// How long the pipes of a command that already exited may stay open
+/// before what they carried so far is taken as its whole output.
+const PIPE_GRACE: Duration = Duration::from_secs(2);
+
+/// One output pipe of a command, read on its own thread.
+struct Drain {
+    read: Arc<Mutex<Vec<u8>>>,
+    closed: crossbeam_channel::Receiver<()>,
+}
+
+impl Drain {
+    fn start(pipe: Option<impl std::io::Read + Send + 'static>) -> Drain {
+        let read = Arc::new(Mutex::new(Vec::new()));
+        let (done, closed) = crossbeam_channel::bounded(1);
+        let sink = Arc::clone(&read);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            let mut pipe = pipe;
+            while let Some(pipe) = pipe.as_mut() {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => lock(&sink).extend(chunk.iter().take(n)),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+            let _ = done.send(());
+        });
+        Drain { read, closed }
+    }
+
+    /// Everything read once the pipe closed, or by `deadline` if it has not.
+    fn take(self, deadline: std::time::Instant) -> Vec<u8> {
+        let _ = self.closed.recv_deadline(deadline);
+        std::mem::take(&mut *lock(&self.read))
+    }
 }
 
 /// Stop `child` and, on Windows, whatever it started: a `.cmd` tool runs
@@ -508,6 +529,29 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
         }
         assert_eq!(lock(), None);
+    }
+
+    /// A tool may leave a process behind (a daemon it started) that keeps
+    /// the output pipe open long after the tool itself is done. What the
+    /// tool printed is the answer; waiting for the pipe to close would
+    /// outlast any timeout.
+    // The command is a shell script.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_left_behind_does_not_hold_the_answer_back() {
+        let started = std::time::Instant::now();
+        let out = run_timeout(
+            &["sh", "-c", "sleep 20 & echo done"],
+            None,
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        assert_eq!(out, "done\n");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
