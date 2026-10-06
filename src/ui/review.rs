@@ -58,7 +58,9 @@ fn branches(n: usize) -> String {
 fn right_aligned(left: Vec<Span<'static>>, right: Span<'static>, width: u16) -> Line<'static> {
     let used: usize = left.iter().map(|s| s.width()).sum::<usize>() + right.width();
     let mut spans = left;
-    spans.push(Span::raw(" ".repeat((width as usize).saturating_sub(used))));
+    // Never glued together, even when the two do not fit the line.
+    let gap = (width as usize).saturating_sub(used).max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
     spans.push(right);
     Line::from(spans)
 }
@@ -292,7 +294,7 @@ fn outcome_lines(app: &App, width: u16, spaced: bool) -> Vec<Line<'static>> {
         )
     });
     for item in failed {
-        lines.push(progress_line(app, item, width));
+        lines.extend(failure_lines(app, item, width));
     }
     if changed {
         lines.push(Line::styled(
@@ -308,6 +310,52 @@ fn outcome_lines(app: &App, width: u16, spaced: bool) -> Vec<Line<'static>> {
         },
         dim(),
     ));
+    lines
+}
+
+/// Columns an error is pushed in when it goes below its item.
+const INDENT: usize = 4;
+
+/// A failed item and why. An error that does not fit next to the label goes
+/// below it, whole: it is the only clue to what held the item back.
+fn failure_lines(app: &App, item: &Item, width: u16) -> Vec<Line<'static>> {
+    let line = progress_line(app, item, width);
+    let Some(Progress::Err(err)) = app.progress.get(&item.id) else {
+        return vec![line];
+    };
+    if line.width() <= width as usize {
+        return vec![line];
+    }
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  ✗ ", red()),
+        Span::styled(item.label.clone(), Style::default().fg(Color::White)),
+    ])];
+    let room = (width as usize).saturating_sub(INDENT);
+    lines.extend(
+        wrap(&err.to_string(), room)
+            .into_iter()
+            .map(|part| Line::styled(format!("{}{part}", " ".repeat(INDENT)), red())),
+    );
+    lines
+}
+
+/// `text` cut into pieces no wider than `width` columns. Cut anywhere: an
+/// error is mostly one long path, with nothing to break on.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = vec![String::new()];
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = Span::raw(ch.to_string()).width();
+        if used + w > width {
+            lines.push(String::new());
+            used = 0;
+        }
+        if let Some(line) = lines.last_mut() {
+            line.push(ch);
+        }
+        used += w;
+    }
     lines
 }
 
@@ -396,6 +444,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::text::Span;
     use std::path::PathBuf;
 
     fn item(id: u64, source: SourceId, label: &str, size: u64, removal: Removal) -> Item {
@@ -559,6 +608,41 @@ mod tests {
     #[test]
     fn snapshot_done_with_failures() {
         insta::assert_snapshot!(render(&done(true)).backend());
+    }
+
+    /// A tool's error is the only clue to why an item stayed: it is shown
+    /// whole, on its own lines, when it does not fit next to the label.
+    #[test]
+    fn snapshot_done_with_an_error_longer_than_the_line() {
+        let mut a = reviewing();
+        a.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        a.on_remove(RemoveEvent::Ok(3, 1_623_000_000));
+        a.on_remove(RemoveEvent::Ok(1, 412_000_000));
+        a.on_remove(RemoveEvent::Err(
+            2,
+            RemoveError::Failed(
+                "git failed: error: failed to delete \
+                 'C:/Users/u/Documents/work/acme/app/.claude/worktrees/dev-2287-feature-45d8b2': \
+                 Permission denied"
+                    .into(),
+            ),
+        ));
+        a.on_remove(RemoveEvent::Finished);
+        let t = render(&a);
+        let screen = t.backend().to_string();
+        assert!(screen.contains("Permission denied"), "{screen}");
+        insta::assert_snapshot!(t.backend());
+    }
+
+    #[test]
+    fn a_failure_never_touches_its_label() {
+        let line = super::right_aligned(
+            vec![Span::raw("a-long-label")],
+            Span::raw("a-long-error"),
+            10,
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "a-long-label a-long-error");
     }
 
     #[test]
