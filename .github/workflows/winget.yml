@@ -1,0 +1,61 @@
+name: Winget
+
+# Once the Release workflow has attached the binaries, opens the pull request
+# that adds the version to microsoft/winget-pkgs. A workflow's own token
+# cannot open a pull request in someone else's repository, so this is the one
+# place a stored secret is used: WINGET_TOKEN, a classic personal access
+# token with the `public_repo` scope.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Pull request to winget-pkgs
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      # A run started by a release carries the tag as its branch.
+      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+    steps:
+      - name: Check what the pull request needs
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          # The tag ends up inside the action's script: nothing but a version.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::$TAG is not a vX.Y.Z tag."
+            exit 1
+          fi
+          if [ -z "$WINGET_TOKEN" ]; then
+            echo "::warning::WINGET_TOKEN is not set: $TAG was not sent to winget-pkgs."
+            exit 0
+          fi
+          # A version is written from the one before it, so the package has
+          # to be in winget-pkgs already.
+          if ! gh api repos/microsoft/winget-pkgs/contents/manifests/t/tarcisiopgs/devsweep --silent; then
+            echo "::warning::tarcisiopgs.devsweep is not in winget-pkgs yet: $TAG was not sent."
+            exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
+      # Pinned to a commit: the action runs with a token that can write to
+      # every public repository of its owner.
+      - name: Open the pull request
+        if: steps.ready.outputs.go == 'true'
+        uses: vedantmgoyal9/winget-releaser@a8fff44b123f115ce4c21543edf8b677376fc7e0
+        with:
+          identifier: tarcisiopgs.devsweep
+          installers-regex: '-pc-windows-msvc\.zip$'
+          release-tag: ${{ env.TAG }}
+          token: ${{ secrets.WINGET_TOKEN }}
