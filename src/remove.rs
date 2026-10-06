@@ -29,9 +29,13 @@ impl Executor for RealExecutor {
         for entry in std::fs::read_dir(p).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let result = if is_dir {
+            let kind = entry.file_type().ok();
+            let result = if kind.is_some_and(|t| t.is_dir()) {
                 std::fs::remove_dir_all(&path)
+            } else if kind.is_some_and(|t| t.is_symlink()) {
+                // The link itself, never what it points at. Windows removes
+                // a link to a folder (a junction) only as a folder.
+                std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
             } else {
                 std::fs::remove_file(&path)
             };
@@ -752,6 +756,31 @@ mod tests {
         // Even asked directly, the executor removes the junction itself.
         RealExecutor.remove_dir(&junction).unwrap();
         assert!(!junction.exists());
+        assert!(outside.path().join("keep").exists());
+    }
+
+    /// npm and pnpm link packages with junctions. Clearing a folder that
+    /// holds one removes the junction itself and goes on with the rest; the
+    /// folder it points at is left alone.
+    #[cfg(windows)]
+    #[test]
+    fn clearing_a_folder_removes_a_junction_inside_it_not_its_target() {
+        let (_d, h) = home();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), "keep").unwrap();
+        let cache = h.join("cache");
+        fs::create_dir_all(cache.join("sub")).unwrap();
+        fs::write(cache.join("sub/file"), "x").unwrap();
+        fs::write(cache.join("file"), "x").unwrap();
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(cache.join("link"))
+            .arg(outside.path())
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        RealExecutor.clear_dir(&cache).unwrap();
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
         assert!(outside.path().join("keep").exists());
     }
 
