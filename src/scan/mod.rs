@@ -463,6 +463,36 @@ mod tests {
         assert_eq!(err.to_string(), "sh failed: fatal: boom");
     }
 
+    /// npm, pnpm and yarn are `.cmd` files on Windows: the process devsweep
+    /// starts is `cmd.exe`, and the tool runs below it. Past the timeout the
+    /// whole tree stops, or the tool would go on deleting after the removal
+    /// was reported as failed.
+    #[cfg(windows)]
+    #[test]
+    fn timeout_stops_what_the_command_started() {
+        use std::time::{Duration, Instant};
+        let d = tempfile::tempdir().unwrap();
+        let dir = crate::platform::canonical(d.path()).unwrap();
+        let err = run_timeout(
+            &["cmd", "/C", "ping", "-n", "60", "127.0.0.1"],
+            Some(&dir),
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "cmd timed out");
+        // `ping` works in `dir`: while it lives, the folder is locked.
+        let lock = || {
+            crate::inuse::windows::collect()
+                .for_os(Os::Windows)
+                .lock_for(&dir)
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while lock().is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert_eq!(lock(), None);
+    }
+
     #[test]
     fn which_finds_sh() {
         assert!(which("sh").is_some());

@@ -755,6 +755,31 @@ mod tests {
         assert!(outside.path().join("keep").exists());
     }
 
+    /// npm and pnpm link packages with junctions. Clearing a folder that
+    /// holds one removes the junction itself and goes on with the rest; the
+    /// folder it points at is left alone.
+    #[cfg(windows)]
+    #[test]
+    fn clearing_a_folder_removes_a_junction_inside_it_not_its_target() {
+        let (_d, h) = home();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), "keep").unwrap();
+        let cache = h.join("cache");
+        fs::create_dir_all(cache.join("sub")).unwrap();
+        fs::write(cache.join("sub/file"), "x").unwrap();
+        fs::write(cache.join("file"), "x").unwrap();
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(cache.join("link"))
+            .arg(outside.path())
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        RealExecutor.clear_dir(&cache).unwrap();
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
+        assert!(outside.path().join("keep").exists());
+    }
+
     /// The same folder, spelled the plain way and the verbatim way.
     #[cfg(windows)]
     #[test]
