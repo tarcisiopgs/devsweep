@@ -475,13 +475,14 @@ fn main_repo(ctx: &ScanCtx, wt: &Path) -> MainRepo {
     let Ok(dotgit) = std::fs::read_to_string(wt.join(".git")) else {
         return MainRepo::Unknown;
     };
-    let Some(gitdir) = dotgit
-        .trim()
-        .strip_prefix("gitdir:")
-        .map(|g| PathBuf::from(g.trim()))
-    else {
+    let Some(gitdir) = dotgit.trim().strip_prefix("gitdir:").map(str::trim) else {
         return MainRepo::Unknown;
     };
+    // Written by git on another system: it cannot be followed from here.
+    if ctx.os.foreign_path(gitdir) {
+        return MainRepo::Unknown;
+    }
+    let gitdir = PathBuf::from(gitdir);
     let gitdir = if gitdir.is_absolute() {
         gitdir
     } else {
@@ -546,6 +547,11 @@ fn storage_present(ctx: &ScanCtx, gitdir: &Path) -> bool {
     let Ok(real) = crate::platform::canonical(existing) else {
         return false;
     };
+    // The root of a volume is always there: it says nothing about a path
+    // that only exists somewhere else (inside a container).
+    if real.parent().is_none() {
+        return false;
+    }
     let holds_something =
         std::fs::read_dir(&real).is_ok_and(|mut entries| entries.next().is_some());
     holds_something
@@ -1095,6 +1101,53 @@ mod tests {
         let gitdir = home.join("code/r/.git/worktrees/w1");
         orphan(&agent_root, gitdir.to_str().unwrap());
         assert_unknown(&scan_orphan(&home, &agent_root));
+    }
+
+    fn scan_orphan_on(os: crate::platform::Os, gitdir: &str) -> Item {
+        let d = tempfile::tempdir().unwrap();
+        let home = crate::platform::canonical(d.path()).unwrap();
+        let agent_root = home.join(".codex/worktrees");
+        orphan(&agent_root, gitdir);
+        let mut items = run_agent(
+            &ctx(&home.join("elsewhere"), &home, InUse::default()).with_os(os),
+            vec![agent_root],
+        );
+        assert_eq!(items.len(), 1);
+        items.remove(0)
+    }
+
+    /// A `gitdir:` written by git on another system (Windows git working on
+    /// WSL files, WSL git working on a Windows folder) names a place this
+    /// system cannot look at: the repository behind it may be intact.
+    #[test]
+    fn gitdir_written_by_another_system_is_unknown_not_broken() {
+        use crate::platform::Os;
+        for gitdir in [
+            "C:/Users/u/r/.git/worktrees/w1",
+            "C:\\Users\\u\\r\\.git\\worktrees\\w1",
+            "//wsl.localhost/Ubuntu/home/u/r/.git/worktrees/w1",
+        ] {
+            for os in [Os::Linux, Os::MacOs] {
+                assert_unknown(&scan_orphan_on(os, gitdir));
+            }
+        }
+        assert_unknown(&scan_orphan_on(
+            Os::Windows,
+            "/mnt/c/Users/u/r/.git/worktrees/w1",
+        ));
+    }
+
+    /// A worktree made inside a container points at a path that only exists
+    /// there (`/workspaces/…`). When nothing of that path exists here but
+    /// the root of the volume, the root is no evidence of a deleted
+    /// repository.
+    #[test]
+    fn gitdir_with_only_the_volume_root_left_is_unknown_not_broken() {
+        let item = scan_orphan_on(
+            crate::platform::Os::current(),
+            "/devsweep-absent-root/r/.git/worktrees/w1",
+        );
+        assert_unknown(&item);
     }
 
     /// The repository was deleted from a folder that still holds other
