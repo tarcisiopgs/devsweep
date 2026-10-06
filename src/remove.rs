@@ -238,7 +238,7 @@ pub fn run_removals_until(
                 if let Some((repo, _)) = worktree_remove(&item.removal) {
                     repos_to_prune.insert(repo.to_path_buf());
                 }
-                let _ = tx.send(RemoveEvent::Ok(item.id, item.size.unwrap_or(0)));
+                let _ = tx.send(RemoveEvent::Ok(item.id, freed(item)));
                 if let Some(branch) = branch {
                     let _ = tx.send(RemoveEvent::Leftover(branch));
                 }
@@ -255,6 +255,21 @@ pub fn run_removals_until(
         );
     }
     let _ = tx.send(RemoveEvent::Finished);
+}
+
+/// Bytes an item just removed gave back.
+///
+/// A cache cleaned by its own tool is measured again: the tool decides what
+/// to keep (`pnpm store prune`, `uv cache prune`), so the size the scan
+/// saw is only the most it could free. Everything else is gone whole.
+fn freed(item: &Item) -> u64 {
+    let scanned = item.size.unwrap_or(0);
+    match (&item.removal, &item.path) {
+        (Removal::Command { .. }, Some(path)) if item.source == SourceId::DevCaches => {
+            scanned.saturating_sub(crate::fsutil::dir_size(path))
+        }
+        _ => scanned,
+    }
 }
 
 /// Longest the recheck waits on git before refusing the item.
@@ -493,6 +508,72 @@ mod tests {
             );
             assert!(!rx.iter().any(|e| matches!(e, RemoveEvent::Leftover(_))));
         }
+    }
+
+    fn cache_item(path: &Path, removal: Removal, size: u64) -> Item {
+        item(
+            1,
+            SourceId::DevCaches,
+            Some(path.to_path_buf()),
+            removal,
+            size,
+        )
+    }
+
+    fn freed(events: &[RemoveEvent]) -> Option<u64> {
+        events.iter().find_map(|e| match e {
+            RemoveEvent::Ok(_, bytes) => Some(*bytes),
+            _ => None,
+        })
+    }
+
+    /// `pnpm store prune` keeps what is still in use: the space freed is what
+    /// left the folder, not what the scan measured in it.
+    #[test]
+    fn a_cache_command_frees_only_what_left_the_folder() {
+        let (_d, h) = home();
+        let cache = h.join("pnpm-store");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("kept"), vec![1u8; 8192]).unwrap();
+        let kept = crate::fsutil::dir_size(&cache);
+        assert!(kept > 0);
+        let prune = Removal::Command {
+            argv: vec!["pnpm".into(), "store".into(), "prune".into()],
+            cwd: None,
+        };
+        // The fake command deletes nothing, so only the 500 bytes are gone.
+        let events = run(
+            vec![cache_item(&cache, prune.clone(), kept + 500)],
+            &Fake::default(),
+            &guard(&h),
+            &ok,
+        );
+        assert_eq!(freed(&events), Some(500));
+        // A folder that grew meanwhile freed nothing, never a negative size.
+        let events = run(
+            vec![cache_item(&cache, prune, kept - 1)],
+            &Fake::default(),
+            &guard(&h),
+            &ok,
+        );
+        assert_eq!(freed(&events), Some(0));
+    }
+
+    #[test]
+    fn a_cache_folder_wiped_by_devsweep_frees_its_scanned_size() {
+        let (_d, h) = home();
+        let cache = h.join("Library/Caches/pip");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("kept"), vec![1u8; 8192]).unwrap();
+        // The fake leaves the file behind; a real wipe either empties the
+        // folder or fails, so the scanned size stands.
+        let events = run(
+            vec![cache_item(&cache, Removal::ClearDir(cache.clone()), 700)],
+            &Fake::default(),
+            &guard(&h),
+            &ok,
+        );
+        assert_eq!(freed(&events), Some(700));
     }
 
     #[test]

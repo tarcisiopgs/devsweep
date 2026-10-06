@@ -1,0 +1,25 @@
+---
+source: src/ui/review.rs
+assertion_line: 632
+expression: t.backend()
+---
+"┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
+"│ ✓ Freed 2.0 GB                                                                                   │"
+"│                                                                                                  │"
+"│   Worktrees     412 MB   1 item                                                                  │"
+"│   Docker        1.6 GB   1 item                                                                  │"
+"│                                                                                                  │"
+"│ ✗ 1 not removed                                                                                  │"
+"│   ✗ codex/old app                                                                                │"
+"│     git failed: error: failed to delete 'C:/Users/u/Documents/work/acme/app/.claude/worktrees/de │"
+"│     v-2287-feature-45d8b2': Permission denied                                                    │"
+"│   Press r to scan again.                                                                         │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│──────────────────────────────────────────────────────────────────────────────────────────────────│"
+"│ r rescan · q quit                                                                                │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

@@ -416,6 +416,26 @@ mod tests {
         );
     }
 
+    /// `npm cache verify` keeps everything still valid, so the item showed a
+    /// size it never freed. The cache is cleaned whole, and a download cache
+    /// is never preselected.
+    #[test]
+    fn npm_cache_is_cleaned_whole_and_never_preselected() {
+        let r = by_id("npm-cacache");
+        assert!(!r.safe);
+        assert_eq!(
+            r.command.as_deref(),
+            Some(
+                &[
+                    "npm".to_string(),
+                    "cache".into(),
+                    "clean".into(),
+                    "--force".into()
+                ][..]
+            )
+        );
+    }
+
     #[test]
     fn command_falls_back_to_mode_when_bin_missing() {
         let d = tempfile::tempdir().unwrap();
@@ -429,10 +449,10 @@ mod tests {
 
     #[test]
     fn safe_rule_is_not_safe_when_falling_back_from_its_command() {
-        // `npm cache verify` is harmless; wiping the npm cache is not.
+        // `safe` was decided for `go clean -cache`, not for wiping the folder.
         let d = tempfile::tempdir().unwrap();
-        fill(&d.path().join(".npm/_cacache"));
-        let rule = by_id("npm-cacache");
+        fill(&d.path().join("Library/Caches/go-build"));
+        let rule = by_id("go-build");
         assert!(rule.safe && rule.command.is_some());
         let items = scan(d.path(), vec![rule], &[], InUse::default());
         assert!(matches!(items[0].removal, Removal::ClearDir(_)));
