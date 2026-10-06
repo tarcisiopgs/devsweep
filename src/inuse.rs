@@ -676,12 +676,22 @@ mod tests {
             .current_dir(&dir)
             .spawn()
             .unwrap();
-        let inuse = InUse::collect(Os::Linux);
-        let lock = inuse.lock_for(&dir);
+        let expected = Some(format!("sleep · PID {}", child.id()));
+        // The kernel renames a process a moment after it starts running the
+        // new program: until then it still carries this thread's name.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let (inuse, lock) = loop {
+            let inuse = InUse::collect(Os::Linux);
+            let lock = inuse.lock_for(&dir);
+            if lock == expected || std::time::Instant::now() >= deadline {
+                break (inuse, lock);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
         let own = inuse.lock_for(&std::env::current_dir().unwrap());
         child.kill().unwrap();
         child.wait().unwrap();
-        assert_eq!(lock, Some(format!("sleep · PID {}", child.id())));
+        assert_eq!(lock, expected);
         // devsweep and what launched it never lock anything.
         assert!(own.is_none_or(|l| !l.contains(&format!("PID {}", std::process::id()))));
     }
