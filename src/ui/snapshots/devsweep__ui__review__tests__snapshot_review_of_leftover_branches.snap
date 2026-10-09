@@ -1,6 +1,5 @@
 ---
 source: src/ui/review.rs
-assertion_line: 534
 expression: render(&a).backend()
 ---
 "┌ devsweep ─ /Users/u/Workspace ───────────────────────────────────────────────────────────────────┐"
@@ -8,9 +7,9 @@ expression: render(&a).backend()
 "│                                                                                                  │"
 "│ Branches                                                                                         │"
 "│   glowz · feat/robots-txt                                                                 merged │"
-"│     (cd /Users/u/Workspace/glowz) git branch -D feat/robots-txt                                  │"
+"│     (cd /Users/u/Workspace/glowz && git branch -D feat/robots-txt)                               │"
 "│   glowz · worktree-validated-tinkering-marble                                             merged │"
-"│     (cd /Users/u/Workspace/glowz) git branch -D worktree-validated-tinkering-marble              │"
+"│     (cd /Users/u/Workspace/glowz && git branch -D worktree-validated-tinkering-marble)           │"
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"

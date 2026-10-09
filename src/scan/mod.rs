@@ -174,13 +174,123 @@ pub fn which(bin: &str) -> Option<PathBuf> {
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Configuration every git started here runs with, above the repository's
-/// own. `core.fsmonitor` names a program git runs on each `status`: a
-/// repository found by the scan must not get to choose one.
-const GIT_ENV: [(&str, &str); 3] = [
-    ("GIT_CONFIG_COUNT", "1"),
-    ("GIT_CONFIG_KEY_0", "core.fsmonitor"),
-    ("GIT_CONFIG_VALUE_0", "false"),
-];
+/// own: a repository found by the scan must not get to choose a program
+/// for git to run. `core.fsmonitor` names one git runs on each `status`,
+/// and a hook is one git runs on what it does there (deleting a branch
+/// fires `reference-transaction`); no folder is below `/dev/null`, so no
+/// hook is found.
+const GIT_CONFIG: [(&str, &str); 2] =
+    [("core.fsmonitor", "false"), ("core.hooksPath", "/dev/null")];
+
+/// The git subcommands that read working tree files, and so run the
+/// repository's filters on them (`worktree remove` checks the status first).
+const READS_WORKTREE: [&str; 2] = ["status", "worktree"];
+
+/// The pattern of what `git config` lists as a filter driver's programs.
+const FILTER_KEYS: &str = r"^filter\..*\.(clean|process|required)$";
+
+/// The folders `argv`, a git command run in `cwd`, reads working tree files
+/// in. Empty for any other command.
+fn worktree_dirs(argv: &[&str], cwd: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let Some(("git", mut args)) = argv.split_first().map(|(bin, args)| (*bin, args)) else {
+        return vec![];
+    };
+    let mut dir = cwd.map(PathBuf::from);
+    // The options before the subcommand: `-C <dir>` and `-c <key>=<value>`.
+    while let [option @ ("-C" | "-c"), value, rest @ ..] = args {
+        if *option == "-C" {
+            dir = Some(PathBuf::from(value));
+        }
+        args = rest;
+    }
+    let Some((subcommand, rest)) = args.split_first() else {
+        return vec![];
+    };
+    if !READS_WORKTREE.contains(subcommand) {
+        return vec![];
+    }
+    // `worktree remove <path>` reads the worktree it names, which may carry
+    // a configuration of its own.
+    let named = match rest {
+        ["remove", .., path] => Some(PathBuf::from(path)),
+        _ => None,
+    };
+    dir.into_iter().chain(named).collect()
+}
+
+/// The filter drivers in `listing` that a repository defines, as opposed to
+/// the user: `git config --show-scope --name-only -z` prints a scope and a
+/// key (`filter.<driver>.<program>`) per entry. The user's own drivers
+/// (Git LFS, set up for every repository) are not the repository's to abuse.
+fn repository_filter_drivers(listing: &[u8]) -> std::collections::BTreeSet<String> {
+    let mut fields = listing
+        .split(|b| *b == 0)
+        .map(|field| String::from_utf8_lossy(field));
+    let mut drivers = std::collections::BTreeSet::new();
+    while let (Some(scope), Some(key)) = (fields.next(), fields.next()) {
+        let driver = key
+            .strip_prefix("filter.")
+            .and_then(|rest| rest.rsplit_once('.'))
+            .map(|(driver, _)| driver.to_string());
+        if matches!(scope.as_ref(), "local" | "worktree") {
+            drivers.extend(driver);
+        }
+    }
+    drivers
+}
+
+/// Configuration that turns off the programs the repository in `dir` names
+/// to filter file contents (`filter.<driver>.clean`, `.process`): git runs
+/// them on each file it reads again. A driver marked as required would
+/// fail without its program, so it stops being required too; the file then
+/// compares as it is on disk, which can only make it look modified.
+fn filter_overrides(
+    dir: &std::path::Path,
+    timeout: Duration,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let dir = dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("git cannot be asked about {}", dir.display()))?;
+    let listing = exec(
+        &[
+            "git",
+            "-C",
+            dir,
+            "config",
+            "--show-scope",
+            "--name-only",
+            "-z",
+            "--get-regexp",
+            FILTER_KEYS,
+        ],
+        None,
+        None,
+        timeout,
+    )?;
+    // git config exits 1 when no key matches.
+    if !matches!(listing.status.code(), Some(0 | 1)) {
+        anyhow::bail!("git could not list the filters of {dir}");
+    }
+    Ok(repository_filter_drivers(&listing.stdout)
+        .into_iter()
+        .flat_map(|driver| {
+            [("clean", ""), ("process", ""), ("required", "false")]
+                .map(|(key, value)| (format!("filter.{driver}.{key}"), value.to_string()))
+        })
+        .collect())
+}
+
+/// `config` as the variables git reads configuration from.
+fn git_config_env(config: &[(String, String)]) -> Vec<(String, String)> {
+    std::iter::once(("GIT_CONFIG_COUNT".to_string(), config.len().to_string()))
+        .chain(config.iter().enumerate().flat_map(|(n, (key, value))| {
+            [
+                (format!("GIT_CONFIG_KEY_{n}"), key.clone()),
+                (format!("GIT_CONFIG_VALUE_{n}"), value.clone()),
+            ]
+        }))
+        .collect()
+}
 
 /// Run `argv` in `cwd`, feeding `stdin`, and kill it after `timeout`.
 /// stdin, stdout and stderr each get their own thread, so a chatty command
@@ -202,9 +312,17 @@ pub fn exec(
         Os::Windows => which(bin).ok_or_else(|| anyhow::anyhow!("{bin} not found"))?,
         Os::MacOs | Os::Linux => PathBuf::from(bin),
     };
+    let mut config: Vec<(String, String)> = GIT_CONFIG
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    // A repository that cannot be asked about its filters is not read.
+    for dir in worktree_dirs(argv, cwd) {
+        config.extend(filter_overrides(&dir, timeout)?);
+    }
     let mut cmd = Command::new(program);
     cmd.args(args)
-        .envs(GIT_ENV)
+        .envs(git_config_env(&config))
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
@@ -334,7 +452,7 @@ mod tests {
     use super::*;
     use crate::inuse::InUse;
     use crate::model::SourceId;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     struct Fake {
@@ -598,6 +716,125 @@ mod tests {
         )
         .unwrap();
         assert!(!marker.exists());
+    }
+
+    /// A repository of one commit on `main`, and a way to run git in it
+    /// without going through [`exec`].
+    #[cfg(unix)]
+    fn repo_with_commit(dir: &std::path::Path) -> (PathBuf, impl Fn(&[&str])) {
+        let repo = dir.join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        let at = repo.clone();
+        let git = move |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&at)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", "init"]);
+        (repo, git)
+    }
+
+    /// An executable script at `path` that leaves `marker` behind.
+    #[cfg(unix)]
+    fn marking_script(path: &std::path::Path, marker: &std::path::Path, then: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!("#!/bin/sh\ntouch '{}'\n{then}\n", marker.display());
+        std::fs::write(path, script).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A repository can name a program git runs on a file's content
+    /// (`filter.<name>.clean`), and `status` runs it on every file whose
+    /// timestamp moved.
+    // The program is a shell script.
+    #[cfg(unix)]
+    #[test]
+    fn git_does_not_run_the_clean_filter_a_repository_names() {
+        let d = tempfile::tempdir().unwrap();
+        let (repo, git) = repo_with_commit(d.path());
+        let (marker, filter) = (d.path().join("ran"), d.path().join("filter.sh"));
+        marking_script(&filter, &marker, "cat");
+        std::fs::write(repo.join(".gitattributes"), "*.txt filter=x\n").unwrap();
+        git(&["config", "filter.x.clean", filter.to_str().unwrap()]);
+        git(&["config", "filter.x.required", "true"]);
+        // A timestamp unlike the index's makes git read the file again.
+        let later = std::time::SystemTime::now() + Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(repo.join("a.txt"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let out = run_timeout(
+            &["git", "-C", repo.to_str().unwrap(), "status", "--porcelain"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(!marker.exists());
+        assert_eq!(out.trim(), "?? .gitattributes");
+    }
+
+    /// A repository's hooks run on what git does there: deleting a branch
+    /// fires `reference-transaction`.
+    // The hook is a shell script.
+    #[cfg(unix)]
+    #[test]
+    fn git_does_not_run_the_hooks_of_a_repository() {
+        let d = tempfile::tempdir().unwrap();
+        let (repo, git) = repo_with_commit(d.path());
+        git(&["branch", "gone"]);
+        let marker = d.path().join("ran");
+        marking_script(&repo.join(".git/hooks/reference-transaction"), &marker, "");
+        run_timeout(
+            &["git", "-C", repo.to_str().unwrap(), "branch", "-D", "gone"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn only_git_commands_that_read_the_working_tree_name_their_folders() {
+        let dirs = |argv: &[&str], cwd: Option<&str>| worktree_dirs(argv, cwd.map(Path::new));
+        assert_eq!(
+            dirs(&["git", "-C", "/w/wt", "status", "--porcelain"], None),
+            [PathBuf::from("/w/wt")]
+        );
+        assert_eq!(
+            dirs(
+                &["git", "-c", "a=b", "-C", "/w/wt", "status"],
+                Some("/else")
+            ),
+            [PathBuf::from("/w/wt")]
+        );
+        // The worktree being removed is read too, not only the repository.
+        assert_eq!(
+            dirs(&["git", "worktree", "remove", "/w/wt"], Some("/w/repo")),
+            [PathBuf::from("/w/repo"), PathBuf::from("/w/wt")]
+        );
+        assert!(dirs(&["git", "-C", "/w/repo", "ls-files", "-z"], None).is_empty());
+        assert!(dirs(&["docker", "status"], Some("/w")).is_empty());
+        assert!(dirs(&[], None).is_empty());
+    }
+
+    #[test]
+    fn filter_drivers_of_the_user_are_left_alone() {
+        let listing = b"global\0filter.lfs.clean\0local\0filter.x.clean\0\
+            worktree\0filter.a.b.process\0local\0filter.x.required\0";
+        assert_eq!(
+            repository_filter_drivers(listing),
+            ["a.b".to_string(), "x".to_string()].into_iter().collect()
+        );
     }
 
     #[test]

@@ -159,14 +159,14 @@ impl Removal {
                 format!("rm -rf {}", paths.join(" "))
             }
             Removal::Worktree { path, repo } => format!(
-                "(cd {}) git worktree remove {}",
+                "(cd {} && git worktree remove {})",
                 quote(&repo.to_string_lossy()),
                 quote(&path.to_string_lossy())
             ),
             Removal::Command { argv, cwd } => {
                 let cmd = argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
                 match cwd {
-                    Some(dir) => format!("(cd {}) {}", quote(&dir.to_string_lossy()), cmd),
+                    Some(dir) => format!("(cd {} && {})", quote(&dir.to_string_lossy()), cmd),
                     None => cmd,
                 }
             }

@@ -251,7 +251,8 @@ impl Scanner for Catalog {
                 path: Some(path.clone()),
                 size: Some(bytes),
                 status: vec![Status::Detail(rule.group.clone())],
-                lock: ctx.inuse.busy(&names),
+                // The same two checks the recheck makes before removing.
+                lock: ctx.inuse.busy(&names).or_else(|| ctx.inuse.lock_for(path)),
                 // `safe` describes the rule's command; its fallback wipes the
                 // folder, which may be a download cache.
                 safe: rule.safe
@@ -496,6 +497,18 @@ mod tests {
         let iu = InUse::parse("p9\ncbun\nn/tmp\n");
         let items = scan(d.path(), vec![by_id("bun-cache")], &[], iu);
         assert_eq!(items[0].lock.as_deref(), Some("bun · PID 9"));
+    }
+
+    /// The recheck refuses a cache with a process working inside it; the
+    /// scan has to say so first, or the item looks free and then fails.
+    #[test]
+    fn process_working_inside_the_cache_locks_item() {
+        let d = tempfile::tempdir().unwrap();
+        let cache = d.path().join(".bun/install/cache");
+        fill(&cache);
+        let iu = InUse::parse(&format!("p9\ncnode\nn{}\n", cache.join("x").display()));
+        let items = scan(d.path(), vec![by_id("bun-cache")], &[], iu);
+        assert_eq!(items[0].lock.as_deref(), Some("node · PID 9"));
     }
 
     #[test]

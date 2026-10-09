@@ -92,6 +92,9 @@ impl Android {
                     if !within(&dir, &self.avd_home) {
                         lock.get_or_insert_with(|| "AVD folder outside the AVD home".into());
                     }
+                    if !removable(ctx, &dir) {
+                        lock.get_or_insert_with(|| OUTSIDE.into());
+                    }
                     Removal::RemovePaths(vec![
                         dir.clone(),
                         self.avd_home.join(format!("{name}.ini")),
@@ -135,7 +138,7 @@ impl Android {
                     path: Some(path.clone()),
                     size: None,
                     status: vec![Status::Orphan],
-                    lock: None,
+                    lock: (!removable(ctx, &path)).then(|| OUTSIDE.into()),
                     // "Unused" is a guess from config.ini; downloading again costs GBs.
                     safe: false,
                     removal: Removal::RemoveDir(path),
@@ -178,6 +181,16 @@ fn emit(tx: &Sender<ScanEvent>, item: Item) {
     if let Some(path) = path {
         size_later(path, id, tx.clone());
     }
+}
+
+/// Why a folder devsweep would have to delete itself is not offered.
+const OUTSIDE: &str = "outside the home folder";
+
+/// Whether the guard would let `path` be deleted: it sits under the home
+/// folder, or under the scanned one unless that holds the home folder. An
+/// SDK or an AVD home kept elsewhere is shown, never offered and refused.
+fn removable(ctx: &ScanCtx, path: &Path) -> bool {
+    within(path, &ctx.home) || (within(path, &ctx.target) && !within(&ctx.home, &ctx.target))
 }
 
 /// `path` is `root` or below it, comparing canonical paths.
@@ -289,8 +302,15 @@ mod tests {
     }
 
     fn scan_in(android: &Android, inuse: InUse) -> Vec<Item> {
+        // The folder `setup` puts the SDK and the AVD home in.
+        let home = android.avd_home.parent().unwrap().to_path_buf();
+        scan_at(android, inuse, home)
+    }
+
+    /// Scan for a user whose home folder, also the scanned one, is `home`.
+    fn scan_at(android: &Android, inuse: InUse, home: PathBuf) -> Vec<Item> {
         // As on macOS: `avdmanager` has no extension there.
-        let ctx = ScanCtx::new("/tmp".into(), "/tmp".into(), inuse).with_os(Os::MacOs);
+        let ctx = ScanCtx::new(home.clone(), home, inuse).with_os(Os::MacOs);
         let (tx, rx) = crossbeam_channel::unbounded();
         android.scan(&ctx, &tx).unwrap();
         drop(tx);
@@ -501,6 +521,32 @@ mod tests {
                     .join("sdk/system-images/android-30/default/arm64-v8a")
             )
         );
+    }
+
+    /// The guard only removes folders under the home folder or the scanned
+    /// one: an SDK kept elsewhere must not be offered and then refused.
+    #[test]
+    fn system_image_of_an_sdk_outside_the_home_folder_is_locked() {
+        let (d, a) = setup();
+        let home = d.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let items = scan_at(&a, processes(""), home);
+        let img = items
+            .iter()
+            .find(|i| i.label == "android-30 · default · arm64-v8a")
+            .unwrap();
+        assert_eq!(img.lock.as_deref(), Some("outside the home folder"));
+    }
+
+    /// The same goes for an AVD removed without avdmanager.
+    #[test]
+    fn avd_outside_the_home_folder_is_locked_without_avdmanager() {
+        let (d, a) = setup();
+        let home = d.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let items = scan_at(&a, processes(""), home);
+        let avd = items.iter().find(|i| i.label == "Pixel_8_API_34").unwrap();
+        assert_eq!(avd.lock.as_deref(), Some("outside the home folder"));
     }
 
     #[test]
