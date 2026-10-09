@@ -57,6 +57,7 @@ packaging/           the winget manifest, pointed at a published release
 - **Adding a source** means a new scanner file, a `SourceId` variant with its label and section, and registration in `all_scanners`. Adding a dev tool cache is only a TOML rule (see below).
 - **Platform differences** live in `src/platform.rs` as plain functions of `Os`, so the rules of every system are testable on any of them. `#[cfg]` is only for code that does not compile elsewhere (Unix metadata, the Windows process snapshot). A test that depends on the system says which one (`ScanCtx::with_os`, `app.os`); a test gated with `#[cfg(unix)]` or `#[cfg(windows)]` carries the reason next to the gate.
 - **External tools** are called with argument vectors, never through a shell. Anything that can hang (git, notably when macOS asks for folder permission) goes through `run_timeout`.
+- **git never runs what a scanned repository names.** Every git goes through `exec`, which turns off `core.fsmonitor` and the hooks, and, for the commands that read working tree files (`status`, `worktree`), the filter drivers the repository's own configuration defines. The user's drivers (Git LFS in the global configuration) stay on. A new git call that reads file contents has to be covered the same way.
 
 ## Safety invariants (do not weaken)
 

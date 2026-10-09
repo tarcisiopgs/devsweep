@@ -431,18 +431,12 @@ impl App {
     /// Open the review on the leftover branches alone. They are items like
     /// any other, so the same review, recheck and removal apply to them.
     fn review_branches(&mut self) {
-        let first = self
-            .sources
-            .values()
-            .flat_map(|v| v.items.iter())
-            .map(|i| i.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        // Counted down from the top: scanners count up from 1 and may still
+        // be running, so the next id they hand out must not be a branch's.
         let items: Vec<Item> = self
             .leftovers
             .iter()
-            .zip(first..)
+            .zip((0..=ItemId::MAX).rev())
             .map(|(b, id)| {
                 let repo = b.repo.file_name().unwrap_or(b.repo.as_os_str());
                 Item {
@@ -527,9 +521,7 @@ impl App {
 
     fn clamp(&mut self) {
         self.cursor_source = self.cursor_source.min(self.sources.len().saturating_sub(1));
-        self.cursor_item = self
-            .cursor_item
-            .min(self.visible_items().len().saturating_sub(1));
+        self.cursor_item = self.cursor_item.min(self.visible_len().saturating_sub(1));
     }
 
     /// Sources in display order: folder sources first, then machine ones.
@@ -555,24 +547,31 @@ impl App {
                     .cmp(&a.size.unwrap_or(0))
                     .then(b.size.is_some().cmp(&a.size.is_some()))
             }),
-            SortBy::Name => items.sort_by_key(|i| i.label.to_lowercase()),
+            SortBy::Name => items.sort_by_cached_key(|i| i.label.to_lowercase()),
             SortBy::Age => items.sort_by_key(|i| std::cmp::Reverse(i.age_days)),
         }
         items
     }
 
+    /// Items of the focused source that pass the filter, in scan order.
+    fn filtered_items(&self) -> impl Iterator<Item = &Item> {
+        let needle = self.filter.as_deref().unwrap_or("").to_lowercase();
+        self.focused_source()
+            .and_then(|source| self.sources.get(&source))
+            .into_iter()
+            .flat_map(|view| view.items.iter())
+            .filter(move |i| needle.is_empty() || i.label.to_lowercase().contains(&needle))
+    }
+
     /// Items of the focused source, filtered and sorted.
     pub fn visible_items(&self) -> Vec<&Item> {
-        let Some(source) = self.focused_source() else {
-            return vec![];
-        };
-        let needle = self.filter.as_deref().unwrap_or("").to_lowercase();
-        let items = self.sources[&source]
-            .items
-            .iter()
-            .filter(|i| needle.is_empty() || i.label.to_lowercase().contains(&needle))
-            .collect();
-        self.sorted(items)
+        self.sorted(self.filtered_items().collect())
+    }
+
+    /// How many items [`App::visible_items`] holds, without sorting them:
+    /// asked on every scan event.
+    fn visible_len(&self) -> usize {
+        self.filtered_items().count()
     }
 
     /// Selected items grouped by source, in display order.
@@ -1220,6 +1219,24 @@ mod tests {
         a
     }
 
+    /// A scanner still running hands out the id right after the last one
+    /// seen: a branch must never share it.
+    #[test]
+    fn late_scan_result_cannot_join_the_branch_review() {
+        let mut a = done_with_leftover();
+        a.on_key(ch('b'));
+        a.on_scan(ScanEvent::Found(item(
+            3,
+            SourceId::Docker,
+            "late",
+            Some(9),
+            false,
+            false,
+        )));
+        let sources: Vec<SourceId> = a.review_groups().into_iter().map(|(s, _)| s).collect();
+        assert_eq!(sources, vec![SourceId::Branches]);
+    }
+
     #[test]
     fn b_on_done_reviews_the_leftover_branches_and_y_deletes_them() {
         let mut a = done_with_leftover();
@@ -1232,7 +1249,7 @@ mod tests {
         assert_eq!(items[0].label, "glowz · feat");
         assert_eq!(
             items[0].removal.describe_for(Os::MacOs),
-            "(cd /w/glowz) git branch -D feat"
+            "(cd /w/glowz && git branch -D feat)"
         );
         assert!(!items[0].safe);
         // The branch must still be at the commit that was verified.
