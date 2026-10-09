@@ -135,9 +135,21 @@ pub fn runtimes_in_use(devices_json: &str) -> anyhow::Result<HashSet<String>> {
         .collect())
 }
 
+/// Runtime identifiers with a simulator running on them right now.
+pub fn runtimes_booted(devices_json: &str) -> anyhow::Result<HashSet<String>> {
+    let list: DeviceList = serde_json::from_str(devices_json)?;
+    Ok(list
+        .devices
+        .into_iter()
+        .filter(|(_, devices)| devices.iter().any(|d| d.state == "Booted"))
+        .map(|(runtime, _)| runtime)
+        .collect())
+}
+
 pub fn runtimes_from_json(
     json: &str,
     used: &HashSet<String>,
+    booted: &HashSet<String>,
     ctx: &ScanCtx,
 ) -> anyhow::Result<Vec<Item>> {
     let map: HashMap<String, Runtime> = serde_json::from_str(json)?;
@@ -161,7 +173,11 @@ pub fn runtimes_from_json(
                 path: None,
                 size: rt.size_bytes,
                 status,
-                lock: None,
+                // Only the scan can tell: `simctl list devices booted` names
+                // every runtime, with or without a simulator running.
+                lock: booted
+                    .contains(&runtime_id)
+                    .then(|| "simulator booted".to_string()),
                 safe: false,
                 removal: Removal::Command {
                     argv: vec![
@@ -203,8 +219,9 @@ impl Scanner for Ios {
             }
         }
         let used = runtimes_in_use(&devices_json)?;
+        let booted = runtimes_booted(&devices_json)?;
         if let Ok(runtimes_json) = run(&["xcrun", "simctl", "runtime", "list", "-j"]) {
-            for item in runtimes_from_json(&runtimes_json, &used, ctx)? {
+            for item in runtimes_from_json(&runtimes_json, &used, &booted, ctx)? {
                 let _ = tx.send(ScanEvent::Found(item));
             }
         }
@@ -319,10 +336,27 @@ mod tests {
         }
     }
 
+    fn runtimes() -> Vec<Item> {
+        let used = runtimes_in_use(DEVICES).unwrap();
+        let booted = runtimes_booted(DEVICES).unwrap();
+        runtimes_from_json(RUNTIMES, &used, &booted, &ctx()).unwrap()
+    }
+
+    /// Deleting a runtime takes the simulators running on it down with it.
+    #[test]
+    fn runtime_of_a_booted_simulator_is_locked() {
+        let rts = runtimes();
+        let lock = |label: &str| rts.iter().find(|i| i.label == label).unwrap().lock.clone();
+        assert_eq!(
+            lock("iOS 27.0 runtime").as_deref(),
+            Some("simulator booted")
+        );
+        assert_eq!(lock("iOS 18.2 runtime"), None);
+    }
+
     #[test]
     fn runtime_without_devices_is_orphan_not_safe() {
-        let used = runtimes_in_use(DEVICES).unwrap();
-        let rts = runtimes_from_json(RUNTIMES, &used, &ctx()).unwrap();
+        let rts = runtimes();
         let orphan = rts.iter().find(|i| i.label == "iOS 18.2 runtime").unwrap();
         assert!(orphan.status.contains(&Status::Orphan));
         assert!(!orphan.safe);
@@ -336,8 +370,7 @@ mod tests {
 
     #[test]
     fn runtime_with_devices_is_not_orphan() {
-        let used = runtimes_in_use(DEVICES).unwrap();
-        let rts = runtimes_from_json(RUNTIMES, &used, &ctx()).unwrap();
+        let rts = runtimes();
         let rt = rts.iter().find(|i| i.label == "iOS 27.0 runtime").unwrap();
         assert!(!rt.status.contains(&Status::Orphan));
     }

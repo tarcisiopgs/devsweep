@@ -317,18 +317,19 @@ fn holds_tracked_files(dir: &Path) -> anyhow::Result<bool> {
 /// The paths among `paths` that git tracks in `repo`; for a folder, every
 /// tracked file inside it.
 fn tracked(repo: &Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
-    let repo_arg = repo.to_string_lossy();
-    let rel: Vec<String> = paths
+    // A path git cannot be given as it is would name something else: no
+    // answer then, never "nothing tracked".
+    fn text(p: &Path) -> anyhow::Result<&str> {
+        p.to_str()
+            .ok_or_else(|| anyhow::anyhow!("git cannot be asked about {}", p.display()))
+    }
+    let repo_arg = text(repo)?;
+    let rel = paths
         .iter()
-        .map(|p| {
-            p.strip_prefix(repo)
-                .unwrap_or(p)
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    let mut argv = vec!["git", "-C", &repo_arg, "ls-files", "-z", "--"];
-    argv.extend(rel.iter().map(String::as_str));
+        .map(|p| text(p.strip_prefix(repo).unwrap_or(p)))
+        .collect::<anyhow::Result<Vec<&str>>>()?;
+    let mut argv = vec!["git", "-C", repo_arg, "ls-files", "-z", "--"];
+    argv.extend(rel);
     let out = crate::scan::exec(&argv, None, None, crate::scan::RUN_TIMEOUT)?;
     if !out.status.success() {
         anyhow::bail!("git ls-files failed in {}", repo.display());
@@ -548,6 +549,23 @@ mod tests {
     fn check_ignore_failure_is_an_error_not_an_empty_answer() {
         let d = tempfile::tempdir().unwrap();
         assert!(check_ignore(d.path(), &[d.path().join("dist")]).is_err());
+    }
+
+    /// git takes the path as text. Written with the bytes it cannot read
+    /// replaced, it names nothing git tracks, and the folder would look
+    /// free of tracked files.
+    // Only a Unix path can hold bytes that are not UTF-8.
+    #[cfg(unix)]
+    #[test]
+    fn folder_git_cannot_be_asked_about_is_an_error_not_untracked() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("r");
+        init_repo(&repo);
+        let vendor = repo
+            .join(std::ffi::OsStr::from_bytes(b"pkg\xff"))
+            .join("vendor");
+        assert!(holds_tracked_files(&vendor).is_err());
     }
 
     #[test]
