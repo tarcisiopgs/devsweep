@@ -1,22 +1,22 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 
 PackageIdentifier: tarcisiopgs.devsweep
-PackageVersion: 0.4.2
+PackageVersion: 0.4.3
 InstallerType: zip
 NestedInstallerType: portable
 Commands:
 - devsweep
-ReleaseDate: 2026-10-06
+ReleaseDate: 2026-10-09
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/tarcisiopgs/devsweep/releases/download/v0.4.2/devsweep-x86_64-pc-windows-msvc.zip
-  InstallerSha256: 65A8A36B6770338409C7ACC7FB54B5BF5E2F1FD86BF6BDB2A0A179B4B29F9152
+  InstallerUrl: https://github.com/tarcisiopgs/devsweep/releases/download/v0.4.3/devsweep-x86_64-pc-windows-msvc.zip
+  InstallerSha256: E4D820E273CB4B762CB5756197A285463A11F81FFABD3326494326582D771765
   NestedInstallerFiles:
   - RelativeFilePath: devsweep-x86_64-pc-windows-msvc\devsweep.exe
     PortableCommandAlias: devsweep
 - Architecture: arm64
-  InstallerUrl: https://github.com/tarcisiopgs/devsweep/releases/download/v0.4.2/devsweep-aarch64-pc-windows-msvc.zip
-  InstallerSha256: E00175AF50E7A0ABB5D1D553888CF2D63FBC30D926489EE0F10F77C933CD0229
+  InstallerUrl: https://github.com/tarcisiopgs/devsweep/releases/download/v0.4.3/devsweep-aarch64-pc-windows-msvc.zip
+  InstallerSha256: 7D232DD4D9B65C553658512E52C9F373F49DBCAA301E176489239719314766DC
   NestedInstallerFiles:
   - RelativeFilePath: devsweep-aarch64-pc-windows-msvc\devsweep.exe
     PortableCommandAlias: devsweep
