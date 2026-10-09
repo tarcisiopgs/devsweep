@@ -17,6 +17,8 @@ cargo test                                   # the whole suite, including insta 
 cargo clippy --all-targets -- -D warnings    # must be clean, CI enforces it
 cargo fmt                                    # CI runs cargo fmt --check
 cargo insta review                           # accept or reject changed TUI snapshots
+cargo deny check                             # licenses, sources and advisories of the dependencies (deny.toml)
+cargo machete                                # dependencies declared and not used
 cargo run -- ~/some/folder                   # run the TUI against a folder
 scripts/test-linux.sh                        # the suite on Linux, in a container, as a regular user (needs Docker)
 scripts/build-linux.sh                       # the static Linux release binary, in the same container
@@ -24,7 +26,9 @@ scripts/check-windows.sh                     # type-check and lint for Windows, 
 prek install -t pre-commit -t pre-push       # git hooks: fmt + clippy on commit, tests on push
 ```
 
-CI (`.github/workflows/ci.yml`) runs for every pull request, in separate jobs: Lint (fmt and clippy), Typecheck (`cargo check`) and Test, each on `macos-latest`, `ubuntu-latest` and `windows-latest`, and Build (the release build for the two macOS, the two Linux and the two Windows targets). The `check` job only passes when all of them pass, and it is the required status check on `main`.
+CI (`.github/workflows/ci.yml`) runs for every pull request, in separate jobs: Lint (fmt and clippy), Typecheck (`cargo check`) and Test, each on `macos-latest`, `ubuntu-latest` and `windows-latest`, Build (the release build for the two macOS, the two Linux and the two Windows targets), MSRV (`cargo check` with the Rust named by `rust-version` in `Cargo.toml`) and Dependencies (`cargo deny` for licenses, bans and sources, and `cargo machete`). The `check` job only passes when all of them pass, and it is the required status check on `main`. Audit (`cargo audit` and `cargo deny check advisories`) runs beside them without being required: a new advisory must not block an unrelated pull request.
+
+A dependency under a license that `deny.toml` does not list fails Dependencies. devsweep is MIT, so only add a license there when it asks for no more than attribution.
 
 Never confirm a removal (`y` on the review screen) while testing against a real machine unless the user asks for it in that conversation.
 
