@@ -22,6 +22,7 @@ jobs:
     name: Pull request to winget-pkgs
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # A run started by a release carries the tag as its branch.
       TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
