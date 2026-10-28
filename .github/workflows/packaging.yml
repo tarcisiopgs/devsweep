@@ -20,6 +20,7 @@ jobs:
   deb:
     name: .deb with apt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -39,6 +40,7 @@ jobs:
   winget:
     name: winget manifest
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Validate, install and run the manifest

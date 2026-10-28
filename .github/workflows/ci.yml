@@ -13,6 +13,7 @@ jobs:
   lint:
     name: Lint (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
@@ -28,6 +29,7 @@ jobs:
   typecheck:
     name: Typecheck (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
@@ -40,6 +42,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
@@ -53,6 +56,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       matrix:
         include:
@@ -77,6 +81,7 @@ jobs:
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88
@@ -88,6 +93,7 @@ jobs:
   deps:
     name: Dependencies
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
@@ -100,6 +106,7 @@ jobs:
   audit:
     name: Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
@@ -114,6 +121,7 @@ jobs:
     if: always()
     needs: [lint, typecheck, test, build, msrv, deps]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # Require `success` from every job instead of listing the bad results: a job
       # no runner ever picked up ends as cancelled, yet the old
